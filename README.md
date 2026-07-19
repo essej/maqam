@@ -56,7 +56,7 @@ lattice positions, for example `d+` or `f-`.
 Built-in jins names can be abbreviated to an unambiguous prefix:
 
 ```text
-nah bay hij ras kur sab aja nik suz jih zab
+nah bay hij ras kur sab aja nik suz jih zab zam
 ```
 
 ### Rhythm Groups
@@ -316,6 +316,7 @@ clockout <device>      send MIDI clock at current BPM
 | Kurd | `1/1 256/243 32/27 4/3 3/2` | Phrygian |
 | Saba | `1/1 13/12 32/27 80/64` | Major-third endpoint |
 | Zaba | `1/1 12/11 32/27 11/8` | Tritone endpoint |
+| Zamzam | `1/1 16/15 32/27 6/5` | Minor-third endpoint |
 | Ajam | `1/1 9/8 5/4 4/3 3/2` | Major |
 | Nikriz | `1/1 256/243 81/64 4/3 3/2` | Hijaz lower |
 | Suznak | `1/1 9/8 27/22 4/3 3/2` | Rast lower |

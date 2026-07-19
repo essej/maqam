@@ -106,6 +106,7 @@ fn default_registry_map() -> HashMap<String, Vec<(u32, u32)>> {
     );
     m.insert("Saba".into(), vec![(1, 1), (13, 12), (32, 27), (5, 4)]);
     m.insert("Zaba".into(), vec![(1, 1), (12, 11), (32, 27), (11, 8)]);
+    m.insert("Zamzam".into(), vec![(1, 1), (16, 15), (32, 27), (6, 5)]);
     m.insert("Ajam".into(), vec![(1, 1), (9, 8), (5, 4), (4, 3), (3, 2)]);
     m.insert(
         "Nikriz".into(),
@@ -281,6 +282,19 @@ fn color_for_ratio_key(key: &str) -> [u8; 3] {
         clamp(base[1] as f64 - bump * 0.4),
         clamp(base[2] as f64 + bump * 0.2),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_registry_map;
+
+    #[test]
+    fn zamzam_is_a_builtin_jins() {
+        assert_eq!(
+            default_registry_map().get("Zamzam"),
+            Some(&vec![(1, 1), (16, 15), (32, 27), (6, 5)])
+        );
+    }
 }
 
 // ── Pitch ─────────────────────────────────────────────────────────────────────
