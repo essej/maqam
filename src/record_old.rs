@@ -202,7 +202,11 @@ fn build_carpet_tick_highlights(
         .map(|phrase| (phrase.phrase_id, phrase.tick_count))
         .collect();
     let jump_cells = crate::carpet::jump_link_cells(phrases);
-    let mut parts = Vec::new();
+    // A long recording can revisit the same border cells thousands of times.
+    // Giving every visit its own drawbox creates a deeply chained ffmpeg graph
+    // which can crash with SIGBUS while being configured on macOS.  Keep one
+    // drawbox per visual cell and combine all of its active time ranges.
+    let mut ranges: HashMap<(i32, i32, i32, i32, &'static str), Vec<(f64, f64)>> = HashMap::new();
     let mut sample = 0usize;
     for entry in full_seq {
         let phrase = &phrases[entry.phrase_idx];
@@ -222,7 +226,14 @@ fn build_carpet_tick_highlights(
             let yo = layout.y.round() as i32 - outer / 2;
             let xi = layout.x.round() as i32 - inner / 2;
             let yi = layout.y.round() as i32 - inner / 2;
-            parts.push(format!("drawbox=x={xo}:y={yo}:w={outer}:h={outer}:color=0x44FF88@0.20:t=fill:enable='between(t,{start:.6},{end:.6})',drawbox=x={xi}:y={yi}:w={inner}:h={inner}:color=0xD8FFAA@0.82:t=fill:enable='between(t,{start:.6},{end:.6})'"));
+            ranges
+                .entry((xo, yo, outer, outer, "0x44FF88@0.20"))
+                .or_default()
+                .push((start, end));
+            ranges
+                .entry((xi, yi, inner, inner, "0xD8FFAA@0.82"))
+                .or_default()
+                .push((start, end));
             if subdivision == 0 {
                 if let Some(jump_id) = entry.arrived_via_jump {
                     for (ji, cell) in jump_cells
@@ -236,14 +247,29 @@ fn build_carpet_tick_highlights(
                         let size = (cell.size + 3).max(8);
                         let x = cell.x.round() as i32 - size / 2;
                         let y = cell.y.round() as i32 - size / 2;
-                        parts.push(format!("drawbox=x={x}:y={y}:w={size}:h={size}:color=0xD8B060@0.70:t=fill:enable='between(t,{start:.6},{end:.6})'"));
+                        ranges
+                            .entry((x, y, size, size, "0xD8B060@0.70"))
+                            .or_default()
+                            .push((start, end));
                     }
                 }
             }
         }
         sample += bar_samples;
     }
-    parts
+    let mut grouped: Vec<_> = ranges.into_iter().collect();
+    grouped.sort_by_key(|(style, _)| *style);
+    grouped
+        .into_iter()
+        .map(|((x, y, w, h, color), ranges)| {
+            let enable = ranges
+                .into_iter()
+                .map(|(start, end)| format!("between(t,{start:.6},{end:.6})"))
+                .collect::<Vec<_>>()
+                .join("+");
+            format!("drawbox=x={x}:y={y}:w={w}:h={h}:color={color}:t=fill:enable='{enable}'")
+        })
+        .collect()
 }
 
 fn build_center_gosper_rotation_expr(
@@ -921,6 +947,10 @@ pub fn record_cycle(
             .unwrap()
             .as_secs();
         let out = format!("./maqam-{ts}.mp4");
+        // ffmpeg creates its output before it has written the MP4's moov atom.
+        // Encode to a hidden staging file so a failed or interrupted recording
+        // is never presented to the user as a finished movie.
+        let staged_out = format!("./.maqam-{ts}.partial.mp4");
         let log_path = temp_path("maqam-ffmpeg.log");
         let ok1 = ffmpeg_status(
             ffmpeg_command()
@@ -971,7 +1001,7 @@ pub fn record_cycle(
                     "-r",
                     "30",
                     "-shortest",
-                    &out,
+                    &staged_out,
                 ])
                 .stdout(Stdio::null())
                 .stderr(
@@ -980,7 +1010,9 @@ pub fn record_cycle(
                         .unwrap_or(Stdio::null()),
                 ),
         )?;
-        if !ok1 {
+        let encoded = if ok1 {
+            true
+        } else {
             ffmpeg_status(
                 ffmpeg_command()
                     .args([
@@ -1030,12 +1062,21 @@ pub fn record_cycle(
                         "-r",
                         "30",
                         "-shortest",
-                        &out,
+                        &staged_out,
                     ])
                     .stdout(Stdio::null())
-                    .stderr(Stdio::null()),
-            )?;
+                    .stderr(
+                        std::fs::File::create(&log_path)
+                            .map(Stdio::from)
+                            .unwrap_or(Stdio::null()),
+                    ),
+            )?
+        };
+        if !encoded {
+            let _ = std::fs::remove_file(&staged_out);
+            anyhow::bail!("ffmpeg failed to create MP4; details are in {log_path}");
         }
+        std::fs::rename(&staged_out, &out)?;
         Ok(out)
     })();
     crate::REC_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
