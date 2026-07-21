@@ -26,7 +26,7 @@ pub static EXIT_PHRASE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(usize::MAX);
 pub static CUR_SUBDIV: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static CUR_PLAYS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-pub static CUR_JUMP_REM: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CUR_JUMP_VALUE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
 /// Progress atomics: written by render thread, read by TUI.
 pub static REC_SAMPLES_DONE: std::sync::atomic::AtomicUsize =
@@ -35,7 +35,7 @@ pub static REC_SAMPLES_TOTAL: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 pub static REC_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Jump counters visible to TUI: phrase_id → remaining jumps.
+/// Jump counters visible to TUI: phrase_id → displayed one-based value.
 /// Written by audio thread on every jump state change.
 pub static JUMP_COUNTERS: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<usize, usize>>,

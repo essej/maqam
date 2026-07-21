@@ -257,11 +257,8 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     if !on_path {
                         return Span::styled("    ", Style::default().fg(INACTIVE_GRAY).bg(BG));
                     }
-                    let remaining = live_jump_counters
-                        .get(&jump_id)
-                        .copied()
-                        .unwrap_or(times.saturating_sub(1));
-                    let will_jump = Some(source) == upcoming_jump_source && remaining > 0;
+                    let value = live_jump_counters.get(&jump_id).copied().unwrap_or(1);
+                    let will_jump = Some(source) == upcoming_jump_source && value < times.max(1);
                     // The source endpoint describes the immediate transition,
                     // so do not fill it while the current phrase still has
                     // another local repeat to play.  Paused score prediction
@@ -301,11 +298,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             if let Some(ref js) = phrase.jump {
                 let valid_target = app.phrases.iter().any(|p| p.id == js.target_id);
                 // Read counter from the shared map (written by audio thread)
-                let remaining = live_jump_counters
-                    .get(&phrase.id)
-                    .copied()
-                    .unwrap_or(js.times.saturating_sub(1));
-                let pass = js.times.saturating_sub(remaining); // 1-based current pass
+                let pass = live_jump_counters.get(&phrase.id).copied().unwrap_or(1);
                 let total = js.times;
                 let counter = format!("{:<status_width$} ", format!("[{pass}/{total}]"));
 
@@ -526,7 +519,7 @@ fn draw_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         let fx_status = format_fx_status(app.fx);
         Line::from(vec![Span::styled(
             format!(
-                "  {}BPM:{} sus:{:.1}s vcf:{} fx:{} vol:{:.2} phrases:{}  [?] help  [z] pause",
+                "  {}BPM:{} sus:{:.1}s vcf:{} fx:{} vol:{:.2} phrases:{}  [?] help  [z] sound  [z id] jump",
                 if app.paused { "⏸ PAUSED  " } else { "" },
                 app.bpm,
                 app.sustain,

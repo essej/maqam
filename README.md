@@ -100,6 +100,7 @@ stable: deleting or moving entries does not renumber existing IDs.
 
 ```text
 j <id> [times]                       jump back to id, then fall through
+j start [times]                      jump to the current top timeline item
 i <id> <command>                     insert before id
 edit <id> <command>                  replace an entry
 x <id> [id ...]                      delete entries
@@ -124,8 +125,11 @@ x 3
 ### Playback
 
 ```text
-z                  toggle pause/play; unpause restarts from phrase 0
-z <id>             seek to phrase id without toggling pause
+z                  toggle sound/playback off or on
+z <id>             queue phrase id as the next destination
+z start            queue the current top timeline item
+start              shorthand for z start
+pause              alias for toggling pause/play
 q / quit           quit
 ? / help           show help
 ;                  separate multiple commands on one line

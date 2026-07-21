@@ -383,29 +383,20 @@ fn expand_one_cycle(
         let phrase = &phrases[cur];
         if let Some(js) = &phrase.jump {
             let pid = phrase.id;
-            let remaining = jc.entry(pid).or_insert(js.times.saturating_sub(1));
-            if *remaining > 0 {
-                *remaining -= 1;
+            let limit = js.times.max(1);
+            let value = jc.entry(pid).or_insert(1);
+            let incremented = value.saturating_add(1);
+            if incremented <= limit {
+                *value = incremented;
                 let target = phrases
                     .iter()
                     .position(|p| p.id == js.target_id)
                     .unwrap_or(0)
                     .min(phrases.len().saturating_sub(1));
-                let ids: Vec<usize> = if target < cur {
-                    phrases[target..cur]
-                        .iter()
-                        .filter_map(|p| p.jump.as_ref().map(|_| p.id))
-                        .collect()
-                } else {
-                    vec![]
-                };
-                for id in ids {
-                    jc.remove(&id);
-                }
                 cur = target;
                 arrived_via_jump = Some(pid);
             } else {
-                jc.remove(&pid);
+                *value = 1;
                 cur += 1;
             }
             continue;
@@ -435,8 +426,7 @@ fn expand_one_cycle(
             .iter()
             .filter_map(|p| {
                 p.jump.as_ref().map(|js| {
-                    let remaining = jc.get(&p.id).copied().unwrap_or(js.times.saturating_sub(1));
-                    let pass = js.times.saturating_sub(remaining);
+                    let pass = jc.get(&p.id).copied().unwrap_or(1);
                     (p.id, (pass, js.times))
                 })
             })

@@ -406,4 +406,5 @@ pub enum AudioCmd {
     SetVol(f32),
     SetPaused(bool),
     SetCurPhrase(usize),
+    QueueNextPhrase(usize),
 }

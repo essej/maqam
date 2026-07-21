@@ -629,11 +629,11 @@ impl App {
                         self.message = Some(format!("✗ no phrase id {id}"));
                         return;
                     };
-                    // z <id>: seek to phrase, no pause toggle
+                    // z <id>: queue the address for the next phrase exit.
                     match self.phrases.iter().position(|p| p.id == id) {
-                        Some(pos) => {
-                            let _ = self.audio_tx.send(AudioCmd::SetCurPhrase(pos));
-                            self.message = Some(format!("→ phrase {id}"));
+                        Some(_) => {
+                            let _ = self.audio_tx.send(AudioCmd::QueueNextPhrase(id));
+                            self.message = Some(format!("next → phrase {id}"));
                         }
                         None => {
                             self.message = Some(format!("✗ no phrase id {id}"));
@@ -2101,6 +2101,9 @@ fn is_plain_fx_control_line(line: &str) -> bool {
 }
 
 fn resolve_id_ref_in_phrases(phrases: &[Phrase], id_ref: isize) -> Option<usize> {
+    if id_ref == crate::command::START_REF {
+        return phrases.first().map(|phrase| phrase.id);
+    }
     if id_ref >= 0 {
         return Some(id_ref as usize);
     }

@@ -181,6 +181,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
     let mut paused = false;
     let mut jump_counters: std::collections::HashMap<usize, usize> =
         std::collections::HashMap::new();
+    let mut pending_next_id: Option<usize> = None;
 
     let stream = device.build_output_stream(
         &cfg.into(),
@@ -238,17 +239,20 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                     }
                     AudioCmd::SetCurPhrase(pos) => {
                         if pos < phrases.len() {
+                            pending_next_id = None;
                             cur_phrase = pos;
                             // Reset the target phrase to its very beginning
                             phrases[pos].reset();
-                            jump_counters.clear();
-                            if let Ok(mut jc) = crate::jump_counters().try_lock() {
-                                jc.clear();
-                            }
                             crate::CUR_PHRASE
                                 .store(cur_phrase, std::sync::atomic::Ordering::Relaxed);
                             crate::CUR_SUBDIV.store(0, std::sync::atomic::Ordering::Relaxed);
                             crate::CUR_PLAYS.store(0, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    AudioCmd::QueueNextPhrase(id) => {
+                        if let Some(pos) = phrases.iter().position(|p| p.phrase.id == id) {
+                            pending_next_id = Some(id);
+                            crate::EXIT_PHRASE.store(pos, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
                     AudioCmd::ReplacePhrase(p) => {
@@ -288,6 +292,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                         phrases.clear();
                         voices.clear();
                         cur_phrase = 0;
+                        pending_next_id = None;
                         jump_counters.clear();
                         if let Ok(mut jc) = crate::jump_counters().try_lock() {
                             jc.clear();
@@ -304,6 +309,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                     sr,
                     &mut voices,
                     &mut jump_counters,
+                    &mut pending_next_id,
                 );
 
                 if let Some(ctrl) = pending_control {
@@ -476,6 +482,7 @@ fn tick_sequencer(
     _sr: f64,
     _voices: &mut Vec<Voice>,
     jump_counters: &mut std::collections::HashMap<usize, usize>,
+    pending_next_id: &mut Option<usize>,
 ) -> (Option<SubdivEvent>, Milestone, Option<PendingControl>) {
     if phrases.is_empty() {
         return (None, Milestone::None, None);
@@ -491,33 +498,22 @@ fn tick_sequencer(
             (p.id, p.jump.clone())
         };
         if let Some(js) = jump {
-            let remaining = jump_counters
-                .entry(pid)
-                .or_insert(js.times.saturating_sub(1));
-            crate::CUR_JUMP_REM.store(*remaining, std::sync::atomic::Ordering::Relaxed);
-            if *remaining > 0 {
-                *remaining -= 1;
+            let limit = js.times.max(1);
+            let value = jump_counters.entry(pid).or_insert(1);
+            let incremented = value.saturating_add(1);
+            if incremented <= limit {
+                *value = incremented;
+                crate::CUR_JUMP_VALUE.store(*value, std::sync::atomic::Ordering::Relaxed);
                 let target = phrases
                     .iter()
                     .position(|p| p.phrase.id == js.target_id)
                     .unwrap_or(0)
                     .min(phrases.len().saturating_sub(1));
-                let jump_pos = *cur_phrase;
-                let ids: Vec<usize> = if target < jump_pos {
-                    phrases[target..jump_pos]
-                        .iter()
-                        .filter_map(|pp| pp.phrase.jump.as_ref().map(|_| pp.phrase.id))
-                        .collect()
-                } else {
-                    vec![]
-                };
-                for id in ids {
-                    jump_counters.remove(&id);
-                }
                 *cur_phrase = target;
                 crate::CUR_PHRASE.store(*cur_phrase, std::sync::atomic::Ordering::Relaxed);
             } else {
-                jump_counters.remove(&pid);
+                *value = 1;
+                crate::CUR_JUMP_VALUE.store(1, std::sync::atomic::Ordering::Relaxed);
                 *cur_phrase += 1;
                 if *cur_phrase >= phrases.len() {
                     *cur_phrase = 0;
@@ -562,7 +558,9 @@ fn tick_sequencer(
     // Look ahead: simulate what the sequencer will actually do next.
     // Must check jump counters — a live jump loops back (same phrase),
     // an exhausted jump falls through to the next musical phrase.
-    let computed_next = {
+    let computed_next = if let Some(id) = *pending_next_id {
+        phrases.iter().position(|phrase| phrase.phrase.id == id)
+    } else {
         let curr_id = phrases[*cur_phrase].phrase.id;
         let n = phrases.len();
         let mut pos = (*cur_phrase + 1) % n;
@@ -570,11 +568,8 @@ fn tick_sequencer(
         for _ in 0..n {
             let p = &phrases[pos].phrase;
             if let Some(js) = &p.jump {
-                let remaining = jump_counters
-                    .get(&p.id)
-                    .copied()
-                    .unwrap_or_else(|| js.times.saturating_sub(1));
-                if remaining > 0 {
+                let value = jump_counters.get(&p.id).copied().unwrap_or(1);
+                if value < js.times.max(1) {
                     let target = phrases
                         .iter()
                         .position(|pp| pp.phrase.id == js.target_id)
@@ -655,7 +650,10 @@ fn tick_sequencer(
             // means the next counter is visibly entered at [1/n].
             crate::CUR_PLAYS.store(0, std::sync::atomic::Ordering::Relaxed);
             let prev = *cur_phrase;
-            *cur_phrase = (*cur_phrase + 1) % phrases.len();
+            *cur_phrase = pending_next_id
+                .take()
+                .and_then(|id| phrases.iter().position(|phrase| phrase.phrase.id == id))
+                .unwrap_or_else(|| (*cur_phrase + 1) % phrases.len());
             crate::CUR_PHRASE.store(*cur_phrase, std::sync::atomic::Ordering::Relaxed);
             if *cur_phrase != prev && milestone == Milestone::None {
                 milestone = Milestone::PhraseChange;

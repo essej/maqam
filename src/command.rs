@@ -4,6 +4,8 @@ use crate::fx::FxSettings;
 use crate::tuning::{Maqam, Pitch};
 use crate::vcf::{VcfBank, VcfSettings, VcfTarget, VcoWave};
 
+pub const START_REF: isize = isize::MIN;
+
 pub struct JinsSpec {
     pub src: String,
     pub root: Pitch,
@@ -196,6 +198,12 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         "clear" => return Ok(Cmd::Clear),
         "rot" => return Ok(Cmd::Rotate),
         "stop" => return Ok(Cmd::Stop),
+        "start" => {
+            return Ok(Cmd::TogglePause {
+                start_id: Some(START_REF),
+            });
+        }
+        "pause" => return Ok(Cmd::TogglePause { start_id: None }),
         "m" => return Ok(Cmd::Record(1)),
         _ => {}
     }
@@ -228,7 +236,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         .collect();
     let al = alpha.to_ascii_lowercase();
 
-    // ── PAUSE: z [phrase-id] ──────────────────────────────────────────────
+    // ── SOUND TOGGLE / TRANSPORT: z [phrase-id] ──────────────────────────
     if al == "z" {
         let start_id: Option<isize> = if !digits.is_empty() {
             Some(parse_id_ref(&digits, "usage: z [phrase-id]")?)
@@ -236,7 +244,8 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             input
                 .split_whitespace()
                 .nth(1)
-                .and_then(|s| s.parse::<isize>().ok())
+                .map(|value| parse_id_ref(value, "usage: z [phrase-id]"))
+                .transpose()?
         };
         return Ok(Cmd::TogglePause { start_id });
     }
@@ -249,7 +258,8 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             input
                 .split_whitespace()
                 .nth(1)
-                .and_then(|s| s.parse::<isize>().ok())
+                .map(|value| parse_id_ref(value, "usage: j <pos> [times]"))
+                .transpose()?
                 .ok_or("usage: j <pos> [times]")?
         };
         let times_idx = if digits.is_empty() { 2 } else { 1 };
@@ -522,6 +532,9 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
 }
 
 fn parse_id_ref(token: &str, usage: &str) -> Result<isize, String> {
+    if token.eq_ignore_ascii_case("start") {
+        return Ok(START_REF);
+    }
     token.parse::<isize>().map_err(|_| usage.to_string())
 }
 
