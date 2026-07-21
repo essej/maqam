@@ -110,24 +110,6 @@ impl Pt {
     }
 }
 
-fn canonical_score_groups(groups: &[u8]) -> Vec<u8> {
-    if groups.len() >= 6 && groups.len() % 2 == 0 {
-        let half = groups.len() / 2;
-        let motif = &groups[..half];
-        if motif == &groups[half..]
-            && motif
-                .iter()
-                .copied()
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                > 1
-        {
-            return motif.to_vec();
-        }
-    }
-    groups.to_vec()
-}
-
 impl WeaveScore {
     pub fn from_phrases(phrases: &[Phrase]) -> Self {
         let mut score = Self::default();
@@ -135,7 +117,10 @@ impl WeaveScore {
             if phrase.jump.is_some() || phrase.control.is_some() {
                 continue;
             }
-            let groups = canonical_score_groups(&phrase.bar.groups);
+            // The design ring represents exactly what was entered for each
+            // phrase. Phrase repeats and jumps do not duplicate ring beats,
+            // but repeated rhythm groups inside the phrase are real beats.
+            let groups = phrase.bar.groups.clone();
             let first_tick = score.ticks.len();
             for (group_index, &group_len) in groups.iter().enumerate() {
                 for tick_in_group in 0..group_len as usize {
@@ -665,18 +650,16 @@ fn draw_chevrons(
 }
 
 pub fn score_border_layout(score: &WeaveScore) -> Vec<BorderTickLayout> {
-    let phrase_count = score.phrases.len().max(1);
-    let slot = 1.0 / phrase_count as f32;
-    let gap = (slot * 0.08).min(0.014);
+    // Use one global angular grid. Giving each phrase an equal arc makes beats
+    // uneven whenever phrases contain different numbers of ticks.
+    let tick_count = score.ticks.len().max(1) as f32;
     let mut layout = Vec::with_capacity(score.ticks.len());
-    for (phrase_index, phrase) in score.phrases.iter().enumerate() {
-        let phrase_start = phrase_index as f32 * slot + gap * 0.5;
-        let phrase_span = (slot - gap).max(slot * 0.5);
-        let tick_count = phrase.tick_count.max(1);
+    for phrase in &score.phrases {
         for score_tick in 0..phrase.tick_count {
-            let start_t = phrase_start + phrase_span * score_tick as f32 / tick_count as f32;
-            let end_t = phrase_start + phrase_span * (score_tick + 1) as f32 / tick_count as f32;
-            let tick = &score.ticks[phrase.first_tick + score_tick];
+            let global_tick = phrase.first_tick + score_tick;
+            let start_t = global_tick as f32 / tick_count;
+            let end_t = (global_tick + 1) as f32 / tick_count;
+            let tick = &score.ticks[global_tick];
             let p = point_on_circle(BEAT_R, (start_t + end_t) * 0.5);
             layout.push(BorderTickLayout {
                 phrase_id: phrase.phrase_id,
@@ -1207,17 +1190,6 @@ pub fn write_carpet_background(
 mod tests {
     use super::*;
     #[test]
-    fn score_cycles_match_border_tick_example() {
-        assert_eq!(canonical_score_groups(&[4, 4, 4, 4]), vec![4, 4, 4, 4]);
-        assert_eq!(canonical_score_groups(&[3, 3, 2, 3, 3, 2]), vec![3, 3, 2]);
-        let total: usize = canonical_score_groups(&[4, 4, 4, 4])
-            .into_iter()
-            .chain(canonical_score_groups(&[3, 3, 2]))
-            .map(usize::from)
-            .sum();
-        assert_eq!(total, 24);
-    }
-    #[test]
     fn circular_layout_has_points() {
         let score = WeaveScore {
             phrases: vec![WeavePhrase {
@@ -1240,6 +1212,41 @@ mod tests {
         for tick in layout {
             assert!((tick.x - CX).abs() <= BEAT_R + 2.0);
             assert!((tick.y - CY).abs() <= BEAT_R + 2.0);
+        }
+    }
+
+    #[test]
+    fn circular_layout_spaces_all_beats_evenly_across_phrases() {
+        let score = WeaveScore {
+            phrases: vec![
+                WeavePhrase {
+                    phrase_id: 10,
+                    groups: vec![2],
+                    first_tick: 0,
+                    tick_count: 2,
+                },
+                WeavePhrase {
+                    phrase_id: 20,
+                    groups: vec![4],
+                    first_tick: 2,
+                    tick_count: 4,
+                },
+            ],
+            ticks: (0..6)
+                .map(|i| WeaveTick {
+                    phrase_id: if i < 2 { 10 } else { 20 },
+                    group_index: 0,
+                    tick_in_group: if i < 2 { i } else { i - 2 },
+                    group_len: if i < 2 { 2 } else { 4 },
+                })
+                .collect(),
+        };
+
+        let layout = score_border_layout(&score);
+        assert_eq!(layout.len(), 6);
+        for (i, tick) in layout.iter().enumerate() {
+            assert!((tick.start_t - i as f32 / 6.0).abs() < 1e-6);
+            assert!((tick.end_t - (i + 1) as f32 / 6.0).abs() < 1e-6);
         }
     }
 }

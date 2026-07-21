@@ -573,8 +573,10 @@ fn tick_sequencer(
                         .iter()
                         .position(|pp| pp.phrase.id == js.target_id)
                         .unwrap_or(0);
-                    result = Some(target);
-                    break;
+                    // A jump may target a control or another jump. Continue
+                    // simulating until prediction reaches a musical phrase.
+                    pos = target;
+                    continue;
                 }
                 pos = (pos + 1) % n;
             } else if p.control.is_some() {
@@ -599,12 +601,19 @@ fn tick_sequencer(
 
     let is_last_play = pp.plays_done + 1 >= pp.phrase.repeat;
     let is_last_subdiv = curr + 1 >= bar.total_subdivs;
+    // A phrase repeat is an actual self-loop.  Until its final play, the next
+    // phrase is the current phrase; only [n/n] exposes the following score
+    // entry (including any jump it resolves through).
     let next_phrase = if is_last_play {
         computed_next.unwrap_or(*cur_phrase)
     } else {
         *cur_phrase
     };
     crate::NEXT_PHRASE.store(next_phrase, std::sync::atomic::Ordering::Relaxed);
+    crate::EXIT_PHRASE.store(
+        computed_next.unwrap_or(*cur_phrase),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let next_is_different = next_phrase != *cur_phrase;
 
     let mut milestone = Milestone::None;

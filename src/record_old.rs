@@ -227,19 +227,28 @@ fn build_carpet_tick_highlights(
     grouped.sort_by_key(|(style, _)| *style);
     grouped
         .into_iter()
-        .map(|((x, y, w, h, color), ranges)| {
-            let enable = ranges
-                .into_iter()
-                .map(|(start, end)| format!("between(t,{start:.6},{end:.6})"))
+        .flat_map(|((x, y, w, h, color), ranges)| {
+            ranges
+                .chunks(64)
+                .map(|chunk| {
+                    let enable = chunk
+                        .iter()
+                        .copied()
+                        .map(|(start, end)| format!("between(t,{start:.6},{end:.6})"))
+                        .collect::<Vec<_>>()
+                        .join("+");
+                    format!(
+                        "drawbox=x={x}:y={y}:w={w}:h={h}:color={color}:t=fill:enable='{enable}'"
+                    )
+                })
                 .collect::<Vec<_>>()
-                .join("+");
-            format!("drawbox=x={x}:y={y}:w={w}:h={h}:color={color}:t=fill:enable='{enable}'")
         })
         .collect()
 }
 
 fn build_center_gosper_rotation_expr(
     full_seq: &[RenderEntry],
+    cycle_count: usize,
     phrases: &[Phrase],
     bar_samples_for: &dyn Fn(usize, f64) -> usize,
 ) -> String {
@@ -254,9 +263,21 @@ fn build_center_gosper_rotation_expr(
         .iter()
         .map(|phrase| (phrase.phrase_id, phrase.tick_count))
         .collect();
-    let mut expr = String::from("0");
+    let entries_per_cycle = full_seq.len() / cycle_count.max(1);
+    let cycle_entries = &full_seq[..entries_per_cycle.max(1).min(full_seq.len())];
+    let cycle_samples: usize = cycle_entries
+        .iter()
+        .map(|entry| bar_samples_for(entry.phrase_idx, entry.bpm))
+        .sum();
+    let cycle_secs = cycle_samples as f64 / SR;
+    let clock = if cycle_count > 1 && cycle_secs > 0.0 {
+        format!("mod(t,{cycle_secs:.6})")
+    } else {
+        "t".to_string()
+    };
+    let mut terms = Vec::new();
     let mut sample = 0usize;
-    for entry in full_seq {
+    for entry in cycle_entries {
         let phrase = &phrases[entry.phrase_idx];
         let subdiv_secs = 60.0 / (entry.bpm * 2.0);
         let bar_samples = bar_samples_for(entry.phrase_idx, entry.bpm);
@@ -269,11 +290,21 @@ fn build_center_gosper_rotation_expr(
             let start = sample as f64 / SR + subdivision as f64 * subdiv_secs;
             let end = start + subdiv_secs - 0.0001;
             let angle = (((layout.start_t + layout.end_t) * 0.5) as f64) * std::f64::consts::TAU;
-            expr.push_str(&format!("+{angle:.6}*between(t,{start:.6},{end:.6})"));
+            terms.push(format!("{angle:.6}*between({clock},{start:.6},{end:.6})"));
         }
         sample += bar_samples;
     }
-    expr
+    while terms.len() > 1 {
+        terms = terms
+            .chunks(2)
+            .map(|pair| match pair {
+                [left, right] => format!("({left}+{right})"),
+                [only] => only.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+    }
+    terms.pop().unwrap_or_else(|| "0".to_string())
 }
 
 fn expand_one_cycle(
@@ -768,7 +799,7 @@ pub fn record_cycle(
         writeln!(f, "WrapStyle: 0")?;
         writeln!(f, "[V4+ Styles]")?;
         writeln!(f,"Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,Strikeout,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding")?;
-        writeln!(f,"Style: Line,Arial,24,&H00A0FF70,&H00A0FF70,&H00102004,&H00102004,-1,0,0,0,112,104,0,0,1,4,1,7,20,20,10,1")?;
+        writeln!(f,"Style: Line,Menlo,24,&H00A0FF70,&H00A0FF70,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,4,1,7,20,20,10,1")?;
         writeln!(f,"Style: URL,Arial,20,&H0078DD78,&H0078DD78,&H00102004,&H00102004,-1,0,0,0,110,102,0,0,1,3,1,1,20,20,38,1")?;
         writeln!(f, "[Events]")?;
         writeln!(
@@ -787,9 +818,34 @@ pub fn record_cycle(
             format!("{hh}:{mm:02}:{ss:02}.{cs:02}")
         };
         let mut sample = 0usize;
+        let phrase_positions: HashMap<usize, usize> = phrases
+            .iter()
+            .enumerate()
+            .map(|(index, phrase)| (phrase.id, index))
+            .collect();
+        let text_jump_routes: Vec<(usize, usize, usize, usize)> = phrases
+            .iter()
+            .enumerate()
+            .filter_map(|(source, phrase)| {
+                let jump = phrase.jump.as_ref()?;
+                let target = phrase_positions.get(&jump.target_id).copied()?;
+                (target != source).then_some((target, source, phrase.id, jump.times))
+            })
+            .collect();
+        let status_width = phrases.iter().fold("[settings]".len(), |width, phrase| {
+            let total = phrase
+                .jump
+                .as_ref()
+                .map_or(phrase.repeat.max(1), |jump| jump.times);
+            width.max(format!("[{total}/{total}]").len())
+        });
         for (i, entry) in full_seq.iter().enumerate() {
             let phrase_idx = entry.phrase_idx;
-            let next_phrase_idx = full_seq.get(i + 1).map(|next| next.phrase_idx);
+            let next_phrase_idx = full_seq[i + 1..]
+                .iter()
+                .find(|next| next.phrase_idx != phrase_idx)
+                .or_else(|| full_seq.iter().find(|next| next.phrase_idx != phrase_idx))
+                .map(|next| next.phrase_idx);
             let play_num = entry.play_num;
             let snap_idx = entry.snap_idx;
             let bs = bar_samples_for(phrase_idx, entry.bpm);
@@ -821,30 +877,100 @@ pub fn record_cycle(
             let subdiv_secs = 60.0 / (entry.bpm * 2.0);
             let line_h = 26usize;
             let mut margin_v = 30usize;
+            let snap = one_cycle_snaps.get(snap_idx % one_cycle_snaps.len().max(1));
+            let upcoming_jump_source = {
+                let mut position = (phrase_idx + 1) % phrases.len().max(1);
+                let mut found = None;
+                for _ in 0..phrases.len() {
+                    let phrase = &phrases[position];
+                    if phrase.jump.is_some() {
+                        found = Some(position);
+                        break;
+                    }
+                    if phrase.control.is_none() {
+                        break;
+                    }
+                    position = (position + 1) % phrases.len();
+                }
+                found
+            };
             for (pi, p) in phrases.iter().enumerate() {
                 let active = p.jump.is_none() && pi == phrase_idx;
                 let color = if active {
                     "{\\1c&H0000FF00&}"
                 } else if Some(pi) == next_phrase_idx {
-                    "{\\1c&H00FF0000&}"
+                    "{\\1c&H00FF8080&}"
                 } else {
                     "{\\1c&H00909090&}"
                 };
-                let id = format!("{:>3}", p.id);
+                // One isolated two-cell marker column.  Keep it outside the
+                // jump lanes and counters so every following field remains on
+                // the same monospaced tab regardless of state.
+                let marker_head = if active {
+                    '▶'
+                } else if Some(pi) == next_phrase_idx {
+                    '▷'
+                } else {
+                    ' '
+                };
+                let marker = format!("{marker_head} ");
+                let id = format!("{:>2}: ", p.id);
+                let jump_prefix: String = text_jump_routes
+                    .iter()
+                    .map(|&(target, source, jump_id, times)| {
+                        let on_path = target.min(source) <= pi && pi <= target.max(source);
+                        if !on_path {
+                            return "    ";
+                        }
+                        let (pass, total) = snap
+                            .and_then(|state| state.get(&jump_id))
+                            .copied()
+                            .unwrap_or((1, times));
+                        let will_jump = Some(source) == upcoming_jump_source && pass < total;
+                        if pi == target {
+                            if target < source {
+                                "┌──>"
+                            } else {
+                                "└──>"
+                            }
+                        } else if pi == source
+                            && will_jump
+                            && play_num + 1 >= phrases[phrase_idx].repeat.max(1)
+                        {
+                            "●   "
+                        } else {
+                            "│   "
+                        }
+                    })
+                    .collect();
                 if let Some(js) = &p.jump {
-                    let snap = one_cycle_snaps.get(snap_idx % one_cycle_snaps.len().max(1));
                     let (pass, total) = snap
                         .and_then(|s| s.get(&p.id))
                         .copied()
-                        .unwrap_or((0, js.times));
-                    let counter = format!("[{}/{}]", pass.min(total), total);
-                    let text = format!("{color}- {id}: {:<20} {}", p.src, counter);
+                        .unwrap_or((1, js.times));
+                    let counter = format!(
+                        "{:<status_width$} ",
+                        format!("[{}{}{}]", pass.min(total), "/", total)
+                    );
+                    let error = if phrase_positions.contains_key(&js.target_id) {
+                        ""
+                    } else {
+                        "  [missing target]"
+                    };
+                    let text = format!(
+                        "{color}{marker}{id}{jump_prefix}{counter}{}{error}",
+                        p.display_src()
+                    );
                     writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if p.control.is_some() {
-                    let text = format!("{color}- {id}: {}", p.src);
+                    let text = format!(
+                        "{color}{marker}{id}{jump_prefix}{:<status_width$} {}",
+                        "[settings]",
+                        p.display_src()
+                    );
                     writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if active {
-                    let label = &p.src;
+                    let label = p.display_src();
                     let rhythm_plain = p.bar.rhythm_display();
                     let ctr = format!("[{}/{}]", play_num + 1, p.repeat.max(1));
                     let n = p.bar.events.len().max(1);
@@ -859,25 +985,23 @@ pub fn record_cycle(
                                 rhy.push(ch);
                             }
                         }
-                        let pad = " ".repeat(10usize.saturating_sub(rhythm_plain.chars().count()));
-                        let repeat_display = if si == 0 { ctr.as_str() } else { "" };
-                        let body = format!("{:<28} {}{} {:<7}", label, rhy, pad, repeat_display);
-                        let text = format!("{color}▶ {id}: {body}");
+                        let body = format!("{ctr:<status_width$} {:<28} {}", label, rhy);
+                        let text = format!("{color}{marker}{id}{jump_prefix}{body}");
                         writeln!(f, "Dialogue: 0,{ts0},{ts1},Line,,0,0,{margin_v},,{text}")?;
                     }
                     let phrase_end_s = start_s + n as f64 * subdiv_secs;
                     if phrase_end_s < end_s {
                         let ts0 = fmt_t(phrase_end_s);
-                        let body = format!("{:<28} {:<10} {}", label, rhythm_plain, ctr);
-                        let text = format!("{color}> {id}: {body}");
+                        let body = format!("{ctr:<status_width$} {:<28} {}", label, rhythm_plain);
+                        let text = format!("{color}{marker}{id}{jump_prefix}{body}");
                         writeln!(f, "Dialogue: 0,{ts0},{t1},Line,,0,0,{margin_v},,{text}")?;
                     }
                 } else {
-                    let label = &p.src;
+                    let label = p.display_src();
                     let rhythm = p.bar.rhythm_display();
                     let ctr = format!("[1/{}]", p.repeat.max(1));
-                    let body = format!("{:<28} {:<10} {}", label, rhythm, ctr);
-                    let text = format!("{color}- {id}: {body}");
+                    let body = format!("{ctr:<status_width$} {:<28} {}", label, rhythm);
+                    let text = format!("{color}{marker}{id}{jump_prefix}{body}");
                     writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 }
                 margin_v += line_h;
@@ -900,7 +1024,7 @@ pub fn record_cycle(
             tick_highlights.join(",")
         };
         let gosper_rotation =
-            build_center_gosper_rotation_expr(&full_seq, &phrases, &bar_samples_for);
+            build_center_gosper_rotation_expr(&full_seq, cycles, &phrases, &bar_samples_for);
         let gosper_chain = format!(
             "[2:v]format=rgba,colorkey=0x000000:0.02:0.05,rotate='{gosper_rotation}':ow=iw:oh=ih:c=black@0[gosper];[3:v]format=rgba,colorkey=0x000000:0.003:0.02[jumps];[1:v][gosper]overlay=format=auto[carpet0];[carpet0][jumps]overlay=format=auto[carpet1];[carpet1]{highlight_chain}[carpet]"
         );

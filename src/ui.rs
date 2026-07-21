@@ -22,7 +22,9 @@ const ACCENT: Color = Color::Rgb(0, 255, 0);
 const DIM: Color = Color::Rgb(0, 180, 0);
 const CMD: Color = Color::Rgb(0, 255, 0);
 const ERR: Color = Color::Rgb(255, 80, 80);
-const REPEAT: Color = Color::Rgb(0, 255, 0);
+const CURRENT_GREEN: Color = Color::Rgb(80, 255, 120);
+const NEXT_BLUE: Color = Color::Rgb(128, 128, 255);
+const INACTIVE_GRAY: Color = Color::Rgb(128, 128, 128);
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
     enable_raw_mode()?;
@@ -33,6 +35,10 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
 
     loop {
         app.tick(); // poll render thread result; clears rec_rx on completion
+                    // Reassert after terminal initialization and before every flush. Color
+                    // is semantic state here, and a dropped foreground command otherwise
+                    // makes every cell inherit the terminal profile's default green.
+        crossterm::style::force_color_output(true);
         term.draw(|f| draw(f, app))?;
 
         if event::poll(std::time::Duration::from_millis(40))? {
@@ -144,7 +150,7 @@ fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     f.render_widget(ratatui::widgets::Clear, area);
     f.render_widget(
-        ratatui::widgets::Block::default().style(Style::default().bg(BG)),
+        ratatui::widgets::Block::default().style(Style::default().fg(INACTIVE_GRAY).bg(BG)),
         area,
     );
     if app.show_help {
@@ -171,80 +177,172 @@ fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let cur = if app.paused {
-        usize::MAX
-    } else {
-        crate::CUR_PHRASE.load(std::sync::atomic::Ordering::Relaxed)
-    };
+    let cur = crate::CUR_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
     let cur_sub = crate::CUR_SUBDIV.load(std::sync::atomic::Ordering::Relaxed);
     let cur_plays = crate::CUR_PLAYS.load(std::sync::atomic::Ordering::Relaxed);
-    let next = crate::NEXT_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
+    let exit = crate::EXIT_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
     let n = app.phrases.len().max(1);
+    let current_is_last_repeat = app
+        .phrases
+        .get(cur % n)
+        .is_none_or(|phrase| cur_plays + 1 >= phrase.repeat.max(1));
+    let show_prediction = true;
+    let upcoming_jump_source = if show_prediction && !app.phrases.is_empty() {
+        let mut position = (cur + 1) % app.phrases.len();
+        let mut found = None;
+        for _ in 0..app.phrases.len() {
+            let phrase = &app.phrases[position];
+            if phrase.jump.is_some() {
+                found = Some(position);
+                break;
+            }
+            if phrase.control.is_none() {
+                break;
+            }
+            position = (position + 1) % app.phrases.len();
+        }
+        found
+    } else {
+        None
+    };
+    let id_positions: std::collections::HashMap<usize, usize> = app
+        .phrases
+        .iter()
+        .enumerate()
+        .map(|(index, phrase)| (phrase.id, index))
+        .collect();
+    let live_jump_counters = crate::jump_counters()
+        .lock()
+        .map(|counters| counters.clone())
+        .unwrap_or_default();
+    let jumpbacks: Vec<(usize, usize, usize, usize)> = app
+        .phrases
+        .iter()
+        .enumerate()
+        .filter_map(|(source, phrase)| {
+            let jump = phrase.jump.as_ref()?;
+            let target = id_positions.get(&jump.target_id).copied()?;
+            (target != source).then_some((target, source, phrase.id, jump.times))
+        })
+        .collect();
+    let status_width = app
+        .phrases
+        .iter()
+        .fold("[settings]".len(), |width, phrase| {
+            let total = phrase
+                .jump
+                .as_ref()
+                .map_or(phrase.repeat.max(1), |jump| jump.times);
+            width.max(format!("[{total}/{total}]").len())
+        });
 
     let items: Vec<ListItem> = app
         .phrases
         .iter()
         .enumerate()
         .map(|(idx, phrase)| {
-            let playing = !app.paused && idx == cur % n;
-            let is_next = !app.paused && !playing && idx == next;
+            let playing = idx == cur % n;
+            let is_next = show_prediction && !playing && idx == exit;
+            let state_color = if playing {
+                CURRENT_GREEN
+            } else if is_next {
+                NEXT_BLUE
+            } else {
+                INACTIVE_GRAY
+            };
+            let jump_prefix: Vec<Span> = jumpbacks
+                .iter()
+                .map(|&(target, source, jump_id, times)| {
+                    let on_path = target.min(source) <= idx && idx <= target.max(source);
+                    if !on_path {
+                        return Span::styled("    ", Style::default().fg(INACTIVE_GRAY).bg(BG));
+                    }
+                    let remaining = live_jump_counters
+                        .get(&jump_id)
+                        .copied()
+                        .unwrap_or(times.saturating_sub(1));
+                    let will_jump = Some(source) == upcoming_jump_source && remaining > 0;
+                    // The source endpoint describes the immediate transition,
+                    // so do not fill it while the current phrase still has
+                    // another local repeat to play.  Paused score prediction
+                    // may still color the destination, but `●` is reserved for
+                    // the iteration which will actually leave the phrase.
+                    let leaves_current_phrase = current_is_last_repeat;
+                    let (glyph, color) = if idx == target {
+                        (
+                            if target < source {
+                                "┌──>"
+                            } else {
+                                "└──>"
+                            },
+                            if will_jump { NEXT_BLUE } else { INACTIVE_GRAY },
+                        )
+                    } else if idx == source && will_jump && leaves_current_phrase {
+                        ("●   ", NEXT_BLUE)
+                    } else {
+                        ("│   ", INACTIVE_GRAY)
+                    };
+                    Span::styled(glyph, Style::default().fg(color).bg(BG))
+                })
+                .collect();
             let id_str = format!("{:>2}: ", phrase.id);
-            let marker = if playing { "▶ " } else { "  " };
-
+            let marker = if playing {
+                "▶ "
+            } else if is_next {
+                "▷ "
+            } else {
+                "  "
+            };
             // Jump entries — show live counter for every jump, not just the playing one
             if let Some(ref js) = phrase.jump {
                 let valid_target = app.phrases.iter().any(|p| p.id == js.target_id);
                 // Read counter from the shared map (written by audio thread)
-                let remaining = crate::jump_counters()
-                    .lock()
-                    .ok()
-                    .and_then(|jc| jc.get(&phrase.id).copied())
+                let remaining = live_jump_counters
+                    .get(&phrase.id)
+                    .copied()
                     .unwrap_or(js.times.saturating_sub(1));
                 let pass = js.times.saturating_sub(remaining); // 1-based current pass
                 let total = js.times;
-                let counter = format!("  [{}/{}]", pass, total);
+                let counter = format!("{:<status_width$} ", format!("[{pass}/{total}]"));
 
                 let col_src = if !valid_target {
                     Color::Rgb(255, 80, 80)
-                } else if playing {
-                    Color::Rgb(80, 255, 120)
-                } else if is_next {
-                    Color::Rgb(90, 160, 255)
                 } else {
-                    Color::Rgb(105, 105, 105)
+                    state_color
                 };
                 let col_ctr = if !valid_target {
                     Color::Rgb(255, 120, 120)
-                } else if playing {
-                    Color::Rgb(255, 255, 150) // bright counter when active
                 } else {
-                    Color::Rgb(160, 140, 70) // visible but subdued when inactive
+                    state_color
                 };
                 let err = if valid_target {
                     ""
                 } else {
                     "  [missing target]"
                 };
-                return ListItem::new(Line::from(vec![
+                let mut spans = vec![
                     Span::styled(
                         marker,
                         Style::default()
-                            .fg(ACCENT)
+                            .fg(state_color)
                             .bg(BG)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(id_str, Style::default().fg(DIM).bg(BG)),
-                    Span::styled(
-                        phrase.src.clone(),
-                        Style::default()
-                            .fg(col_src)
-                            .bg(BG)
-                            .add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
+                ];
+                spans.extend(jump_prefix.clone());
+                spans.extend(vec![
                     Span::styled(
                         counter,
                         Style::default()
                             .fg(col_ctr)
+                            .bg(BG)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        phrase.display_src(),
+                        Style::default()
+                            .fg(col_src)
                             .bg(BG)
                             .add_modifier(Modifier::BOLD),
                     ),
@@ -255,98 +353,84 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             .bg(BG)
                             .add_modifier(Modifier::BOLD),
                     ),
-                ]));
+                ]);
+                return ListItem::new(Line::from(spans));
             }
 
             if phrase.control.is_some() {
-                let col = if playing {
-                    Color::Rgb(80, 255, 120)
-                } else if is_next {
-                    Color::Rgb(90, 160, 255)
-                } else {
-                    Color::Rgb(105, 105, 105)
-                };
-                return ListItem::new(Line::from(vec![
+                let mut spans = vec![
                     Span::styled(
                         marker,
                         Style::default()
-                            .fg(ACCENT)
+                            .fg(state_color)
                             .bg(BG)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(id_str, Style::default().fg(DIM).bg(BG)),
+                    Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
+                ];
+                spans.extend(jump_prefix.clone());
+                spans.extend(vec![
                     Span::styled(
-                        phrase.src.clone(),
-                        Style::default().fg(col).bg(BG).add_modifier(Modifier::BOLD),
+                        format!("{:<status_width$} ", "[settings]"),
+                        Style::default().fg(state_color).bg(BG),
                     ),
                     Span::styled(
-                        "  [settings]",
-                        Style::default().fg(Color::Rgb(90, 140, 150)).bg(BG),
+                        phrase.display_src(),
+                        Style::default()
+                            .fg(state_color)
+                            .bg(BG)
+                            .add_modifier(Modifier::BOLD),
                     ),
-                ]));
+                ]);
+                return ListItem::new(Line::from(spans));
             }
 
-            let src_str = format!("{:<28}", phrase.src);
+            let src_str = format!("{:<28}", phrase.display_src());
             let rhythm = phrase.rhythm_display();
-
-            let (fg_id, fg_src) = if playing {
-                (Color::Rgb(80, 255, 120), Color::Rgb(80, 255, 120))
-            } else if is_next {
-                (Color::Rgb(90, 160, 255), Color::Rgb(90, 160, 255))
+            let total_plays = phrase.repeat.max(1);
+            let displayed_play = if playing {
+                (cur_plays + 1).min(total_plays)
             } else {
-                (DIM, Color::Rgb(105, 105, 105))
+                1
             };
 
             let mut spans = vec![
                 Span::styled(
                     marker,
                     Style::default()
-                        .fg(ACCENT)
+                        .fg(state_color)
                         .bg(BG)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(id_str, Style::default().fg(fg_id).bg(BG)),
-                Span::styled(src_str, Style::default().fg(fg_src).bg(BG)),
-                Span::raw(" "),
+                Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
             ];
+            spans.extend(jump_prefix);
+            spans.extend(vec![
+                Span::styled(
+                    format!(
+                        "{:<status_width$} ",
+                        format!("[{displayed_play}/{total_plays}]")
+                    ),
+                    Style::default()
+                        .fg(state_color)
+                        .bg(BG)
+                        .add_modifier(if playing {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+                Span::styled(src_str, Style::default().fg(state_color).bg(BG)),
+                Span::raw(" "),
+            ]);
 
             for (si, ch) in rhythm.chars().enumerate() {
-                let is_now = playing && si == cur_sub;
-                let sty = if is_now {
-                    // Active beat: black text on bright white — unmistakable
-                    Style::default()
-                        .fg(Color::Rgb(0, 0, 0))
-                        .bg(Color::Rgb(255, 255, 255))
-                        .add_modifier(Modifier::BOLD)
-                } else if playing {
-                    // Current phrase, other beats: green so active stands out.
-                    let col = match ch {
-                        'X' => Color::Rgb(40, 210, 80),
-                        _ => Color::Rgb(30, 150, 60),
-                    };
-                    Style::default().fg(col).bg(BG)
-                } else if is_next {
-                    Style::default().fg(Color::Rgb(70, 130, 220)).bg(BG)
-                } else {
-                    // Inactive phrase: gray
-                    Style::default().fg(Color::Rgb(80, 80, 80)).bg(BG)
-                };
+                let is_now = !app.paused && playing && si == cur_sub;
+                let mut sty = Style::default().fg(state_color).bg(BG);
+                if is_now {
+                    sty = sty.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+                }
                 spans.push(Span::styled(ch.to_string(), sty));
-            }
-
-            if playing && phrase.repeat > 1 {
-                spans.push(Span::styled(
-                    format!(" [{}/{}]", cur_plays + 1, phrase.repeat),
-                    Style::default()
-                        .fg(Color::Rgb(180, 180, 100))
-                        .bg(BG)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            } else if !playing && phrase.repeat > 1 {
-                spans.push(Span::styled(
-                    format!("  ×{}", phrase.repeat),
-                    Style::default().fg(REPEAT).bg(BG),
-                ));
             }
 
             ListItem::new(Line::from(spans))
@@ -364,7 +448,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     .add_modifier(Modifier::BOLD),
             ))
             .border_style(Style::default().fg(BORDER).bg(BG))
-            .style(Style::default().bg(BG)),
+            .style(Style::default().fg(INACTIVE_GRAY).bg(BG)),
     );
     f.render_widget(list, area);
 }

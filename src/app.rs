@@ -934,6 +934,15 @@ impl App {
                 phrase.id = id;
                 self.phrases[pos] = phrase.clone();
                 let _ = self.audio_tx.send(AudioCmd::ReplacePhrase(phrase));
+                // Editing establishes the score-design position. Move playback
+                // to the edited phrase so the TUI immediately marks it current
+                // and the audio thread can publish its jump-aware successor.
+                crate::CUR_PHRASE.store(pos, std::sync::atomic::Ordering::Relaxed);
+                crate::CUR_SUBDIV.store(0, std::sync::atomic::Ordering::Relaxed);
+                crate::CUR_PLAYS.store(0, std::sync::atomic::Ordering::Relaxed);
+                crate::NEXT_PHRASE.store(usize::MAX, std::sync::atomic::Ordering::Relaxed);
+                crate::EXIT_PHRASE.store(usize::MAX, std::sync::atomic::Ordering::Relaxed);
+                let _ = self.audio_tx.send(AudioCmd::SetCurPhrase(pos));
                 self.message = Some(format!("edited {id}"));
             }
 

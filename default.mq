@@ -5,7 +5,7 @@ V|28|vcf kick off
 V|21|vcf bass cut 1000 res 0.98 drive 1.25 wave squ
 B|4|180
 P|1|1|d bayati 4444
-J|2|1|3
+J|2|4|3
 P|3|1|c rast 332332
 J|17|4|3
 V|29|vcf bass cut +10t res +0.1t drive 2 wave squ

@@ -21,6 +21,9 @@ mod vcf;
 pub static CUR_PHRASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static NEXT_PHRASE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(usize::MAX);
+/// Phrase reached after the current phrase completes all of its local repeats.
+pub static EXIT_PHRASE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(usize::MAX);
 pub static CUR_SUBDIV: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static CUR_PLAYS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static CUR_JUMP_REM: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -94,6 +97,12 @@ fn run_cli(commands: Vec<String>) -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Color is semantic UI state in maqam-live. Remove NO_COLOR before any
+    // Crossterm code or worker thread can memoize it, then explicitly enable
+    // ANSI colors. Even NO_COLOR=0 counts as enabled under the convention.
+    std::env::remove_var("NO_COLOR");
+    crossterm::style::force_color_output(true);
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.is_empty() {
         return run_cli(cli_commands(&args));

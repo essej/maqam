@@ -86,6 +86,26 @@ pub struct Phrase {
 }
 
 impl Phrase {
+    pub fn display_src(&self) -> String {
+        if self.repeat <= 1 || self.jump.is_some() || self.control.is_some() {
+            return self.src.clone();
+        }
+        let trimmed = self.src.trim_end();
+        let last = trimmed.split_whitespace().last().unwrap_or("");
+        let lower = last.to_ascii_lowercase();
+        if lower
+            .strip_prefix('r')
+            .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+        {
+            return self.src.clone();
+        }
+        if lower == "r" {
+            let prefix = trimmed[..trimmed.len().saturating_sub(last.len())].trim_end();
+            return format!("{prefix} r{}", self.repeat);
+        }
+        format!("{trimmed} r{}", self.repeat)
+    }
+
     pub fn rhythm_display(&self) -> String {
         self.bar.rhythm_display()
     }
