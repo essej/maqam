@@ -257,8 +257,9 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     if !on_path {
                         return Span::styled("    ", Style::default().fg(INACTIVE_GRAY).bg(BG));
                     }
-                    let value = live_jump_counters.get(&jump_id).copied().unwrap_or(1);
-                    let will_jump = Some(source) == upcoming_jump_source && value < times.max(1);
+                    let value = live_jump_counters.get(&jump_id).copied().unwrap_or(0);
+                    let will_jump = Some(source) == upcoming_jump_source
+                        && value.saturating_add(1) < times.max(1);
                     // The source endpoint describes the immediate transition,
                     // so do not fill it while the current phrase still has
                     // another local repeat to play.  Paused score prediction
@@ -298,9 +299,10 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             if let Some(ref js) = phrase.jump {
                 let valid_target = app.phrases.iter().any(|p| p.id == js.target_id);
                 // Read counter from the shared map (written by audio thread)
-                let pass = live_jump_counters.get(&phrase.id).copied().unwrap_or(1);
+                let pass = live_jump_counters.get(&phrase.id).copied().unwrap_or(0);
                 let total = js.times;
-                let counter = format!("{:<status_width$} ", format!("[{pass}/{total}]"));
+                let displayed_pass = pass.saturating_add(1).min(total.max(1));
+                let counter = format!("{:<status_width$} ", format!("[{displayed_pass}/{total}]"));
 
                 let col_src = if !valid_target {
                     Color::Rgb(255, 80, 80)
@@ -392,9 +394,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             let rhythm = phrase.rhythm_display();
             let total_plays = phrase.repeat.max(1);
             let displayed_play = if playing {
-                (cur_plays + 1).min(total_plays)
-            } else if is_next {
-                total_plays
+                cur_plays.saturating_add(1).min(total_plays)
             } else {
                 1
             };

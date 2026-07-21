@@ -384,9 +384,9 @@ fn expand_one_cycle(
         if let Some(js) = &phrase.jump {
             let pid = phrase.id;
             let limit = js.times.max(1);
-            let value = jc.entry(pid).or_insert(1);
+            let value = jc.entry(pid).or_insert(0);
             let incremented = value.saturating_add(1);
-            if incremented <= limit {
+            if incremented < limit {
                 *value = incremented;
                 let target = phrases
                     .iter()
@@ -396,7 +396,7 @@ fn expand_one_cycle(
                 cur = target;
                 arrived_via_jump = Some(pid);
             } else {
-                *value = 1;
+                *value = 0;
                 cur += 1;
             }
             continue;
@@ -426,7 +426,7 @@ fn expand_one_cycle(
             .iter()
             .filter_map(|p| {
                 p.jump.as_ref().map(|js| {
-                    let pass = jc.get(&p.id).copied().unwrap_or(1);
+                    let pass = jc.get(&p.id).copied().unwrap_or(0);
                     (p.id, (pass, js.times))
                 })
             })
@@ -936,12 +936,12 @@ pub fn record_cycle(
                 let (pass, total) = snap
                     .and_then(|state| state.get(&counter.jump_id))
                     .copied()
-                    .unwrap_or((1, jump.times));
+                    .unwrap_or((0, jump.times));
                 let counter_text = format!(
                     "{{\\pos({:.0},{:.0})}}[{}/{}]",
                     counter.x,
                     counter.y,
-                    pass.min(total),
+                    pass.saturating_add(1).min(total.max(1)),
                     total
                 );
                 writeln!(
@@ -1026,8 +1026,9 @@ pub fn record_cycle(
                         let (pass, total) = snap
                             .and_then(|state| state.get(&jump_id))
                             .copied()
-                            .unwrap_or((1, times));
-                        let will_jump = Some(source) == upcoming_jump_source && pass < total;
+                            .unwrap_or((0, times));
+                        let will_jump = Some(source) == upcoming_jump_source
+                            && pass.saturating_add(1) < total.max(1);
                         if display_pi == target {
                             if target < source {
                                 "┌──>"
@@ -1048,10 +1049,15 @@ pub fn record_cycle(
                     let (pass, total) = snap
                         .and_then(|s| s.get(&p.id))
                         .copied()
-                        .unwrap_or((1, js.times));
+                        .unwrap_or((0, js.times));
                     let counter = format!(
                         "{:<status_width$} ",
-                        format!("[{}{}{}]", pass.min(total), "/", total)
+                        format!(
+                            "[{}{}{}]",
+                            pass.saturating_add(1).min(total.max(1)),
+                            "/",
+                            total
+                        )
                     );
                     let error = if phrase_positions.contains_key(&js.target_id) {
                         ""
@@ -1110,12 +1116,7 @@ pub fn record_cycle(
                     let label = p.display_src();
                     let rhythm = p.bar.rhythm_display();
                     let total = p.repeat.max(1);
-                    let is_exit = Some(pi) == next_phrase_idx;
-                    let ctr = if is_exit {
-                        format!("[{total}/{total}]")
-                    } else {
-                        format!("[1/{total}]")
-                    };
+                    let ctr = format!("[1/{total}]");
                     let ctr = format!("{ctr:<status_width$}");
                     let body = format!("{ctr} {:<28} {}", label, rhythm);
                     let text = format!("{color}{marker}{id}{jump_prefix}{body}");

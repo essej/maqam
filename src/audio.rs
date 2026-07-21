@@ -499,9 +499,9 @@ fn tick_sequencer(
         };
         if let Some(js) = jump {
             let limit = js.times.max(1);
-            let value = jump_counters.entry(pid).or_insert(1);
+            let value = jump_counters.entry(pid).or_insert(0);
             let incremented = value.saturating_add(1);
-            if incremented <= limit {
+            if incremented < limit {
                 *value = incremented;
                 crate::CUR_JUMP_VALUE.store(*value, std::sync::atomic::Ordering::Relaxed);
                 let target = phrases
@@ -512,8 +512,8 @@ fn tick_sequencer(
                 *cur_phrase = target;
                 crate::CUR_PHRASE.store(*cur_phrase, std::sync::atomic::Ordering::Relaxed);
             } else {
-                *value = 1;
-                crate::CUR_JUMP_VALUE.store(1, std::sync::atomic::Ordering::Relaxed);
+                *value = 0;
+                crate::CUR_JUMP_VALUE.store(0, std::sync::atomic::Ordering::Relaxed);
                 *cur_phrase += 1;
                 if *cur_phrase >= phrases.len() {
                     *cur_phrase = 0;
@@ -568,8 +568,8 @@ fn tick_sequencer(
         for _ in 0..n {
             let p = &phrases[pos].phrase;
             if let Some(js) = &p.jump {
-                let value = jump_counters.get(&p.id).copied().unwrap_or(1);
-                if value < js.times.max(1) {
+                let value = jump_counters.get(&p.id).copied().unwrap_or(0);
+                if value.saturating_add(1) < js.times.max(1) {
                     let target = phrases
                         .iter()
                         .position(|pp| pp.phrase.id == js.target_id)
@@ -645,9 +645,8 @@ fn tick_sequencer(
         evolve_bar(&mut pp.phrase.bar, true);
         if pp.plays_done >= pp.phrase.repeat {
             pp.plays_done = 0;
-            // Publish the reset before the following zero-duration control or
-            // jump entries are evaluated.  The UI is one-based, so zero here
-            // means the next counter is visibly entered at [1/n].
+            // Publish the completed-count reset before following control or
+            // jump entries are evaluated. Every phrase is entered at [0/n].
             crate::CUR_PLAYS.store(0, std::sync::atomic::Ordering::Relaxed);
             let prev = *cur_phrase;
             *cur_phrase = pending_next_id
