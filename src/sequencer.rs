@@ -67,6 +67,7 @@ pub struct JumpSpec {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ControlSpec {
+    Stop,
     SetBpm(f64),
     SetSustain(f64),
     SetVcf(VcfChange),

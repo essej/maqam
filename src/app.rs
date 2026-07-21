@@ -300,6 +300,7 @@ impl App {
         for phrase in &self.phrases {
             if let Some(ctrl) = phrase.control {
                 match ctrl {
+                    ControlSpec::Stop => {}
                     ControlSpec::SetBpm(v) => bpm = v,
                     ControlSpec::SetSustain(v) => sustain = v,
                     ControlSpec::SetVcf(v) => {
@@ -795,6 +796,14 @@ impl App {
                 let _ = self.audio_tx.send(AudioCmd::Clear);
                 self.message = Some("cleared".into());
             }
+            Cmd::Stop => {
+                let id = self.next_phrase_id;
+                self.next_phrase_id += 1;
+                let entry = build_control_entry(id, "stop".into(), ControlSpec::Stop);
+                self.phrases.push(entry.clone());
+                let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry));
+                self.message = Some("stop line added".into());
+            }
             Cmd::SetBpm(change) => {
                 let bpm = match apply_bpm_change(self.bpm, change) {
                     Ok(v) => v,
@@ -1261,6 +1270,9 @@ impl App {
             max_id = Some(max_id.map_or(id, |current: usize| current.max(id)));
 
             match fields.first().map(String::as_str) {
+                Some("T") if fields.len() == 3 && fields[2].trim() == "stop" => {
+                    loaded.push(build_control_entry(id, "stop".into(), ControlSpec::Stop));
+                }
                 Some("B") if fields.len() == 3 => {
                     new_bpm = fields[2]
                         .trim()

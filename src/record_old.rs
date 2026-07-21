@@ -208,11 +208,6 @@ fn build_carpet_tick_highlights(
         let next_phrase_idx = full_seq[entry_index + 1..]
             .iter()
             .find(|next| next.phrase_idx != entry.phrase_idx)
-            .or_else(|| {
-                full_seq
-                    .iter()
-                    .find(|next| next.phrase_idx != entry.phrase_idx)
-            })
             .map(|next| next.phrase_idx);
         if let Some(next_phrase_idx) = next_phrase_idx {
             let next_id = phrases[next_phrase_idx].id;
@@ -417,6 +412,7 @@ fn expand_one_cycle(
         }
         if let Some(ctrl) = phrase.control {
             match ctrl {
+                ControlSpec::Stop => break,
                 ControlSpec::SetBpm(v) => bpm = v,
                 ControlSpec::SetSustain(v) => sustain = v,
                 ControlSpec::SetVcf(v) => {
@@ -899,22 +895,23 @@ pub fn record_cycle(
             width.max(format!("[{total}/{total}]").len())
         });
         let jump_counter_positions = crate::carpet::jump_counter_layout(&phrases);
+        let final_phrase_idx = full_seq.last().map(|entry| entry.phrase_idx);
+        let explicit_stop_idx = phrases
+            .iter()
+            .position(|phrase| matches!(phrase.control, Some(ControlSpec::Stop)));
         for (i, entry) in full_seq.iter().enumerate() {
             let phrase_idx = entry.phrase_idx;
+            let stopping = i + 1 == full_seq.len();
             let next_phrase_idx = full_seq[i + 1..]
                 .iter()
                 .find(|next| next.phrase_idx != phrase_idx)
-                .or_else(|| full_seq.iter().find(|next| next.phrase_idx != phrase_idx))
-                .map(|next| next.phrase_idx);
+                .map(|next| next.phrase_idx)
+                .or_else(|| stopping.then_some(explicit_stop_idx).flatten());
             let play_num = entry.play_num;
             let snap_idx = entry.snap_idx;
             let bs = bar_samples_for(phrase_idx, entry.bpm);
             let start_s = sample as f64 / SR;
-            let end_s = if i + 1 < full_seq.len() {
-                (sample + bs) as f64 / SR
-            } else {
-                total_secs
-            };
+            let end_s = (sample + bs) as f64 / SR;
             let t0 = fmt_t(start_s);
             let t1 = fmt_t(end_s);
             let cycle_num = if one_len > 0 { i / one_len } else { 0 };
@@ -1078,9 +1075,14 @@ pub fn record_cycle(
                     let text = preserve_row_spaces(text);
                     writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if p.control.is_some() {
+                    let status = if matches!(p.control, Some(ControlSpec::Stop)) {
+                        "[stop]"
+                    } else {
+                        "[settings]"
+                    };
                     let text = format!(
                         "{color}{marker}{id}{jump_prefix}{:<status_width$} {}",
-                        "[settings]",
+                        status,
                         p.display_src()
                     );
                     let text = preserve_row_spaces(text);
@@ -1131,8 +1133,48 @@ pub fn record_cycle(
                     writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 }
                 margin_v += line_h;
+                if Some(pi) == final_phrase_idx && explicit_stop_idx.is_none() {
+                    let stop_color = if stopping {
+                        "{\\1c&H00FF8080&}"
+                    } else {
+                        "{\\1c&H00909090&}"
+                    };
+                    let stop_marker = if stopping { "▸ " } else { "  " };
+                    let stop_lanes = "    ".repeat(text_jump_routes.len());
+                    let stop_status = format!("{:<status_width$} ", "[stop]");
+                    let stop_text = preserve_row_spaces(format!(
+                        "{stop_color}{stop_marker}--: {stop_lanes}{stop_status}stop"
+                    ));
+                    writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{stop_text}")?;
+                    margin_v += line_h;
+                }
             }
             sample += bs;
+        }
+        // The renderer tail is a real virtual stop step.  It begins only
+        // after sequence expansion has processed the final jump and gives
+        // users a visible current command to stop on.
+        let stop_start = fmt_t(sample as f64 / SR);
+        let stop_end = fmt_t(total_secs);
+        if sample as f64 / SR < total_secs {
+            let stop_lanes = "    ".repeat(text_jump_routes.len());
+            let stop_status = format!("{:<status_width$} ", "[stop]");
+            let (stop_id, stop_source) = explicit_stop_idx
+                .map(|index| {
+                    (
+                        format!("{:>2}: ", phrases[index].id),
+                        phrases[index].display_src(),
+                    )
+                })
+                .unwrap_or_else(|| ("--: ".into(), "stop".into()));
+            let stop_text = preserve_row_spaces(format!(
+                "{{\\1c&H0000FF00&}}▶ {stop_id}{stop_lanes}{stop_status}{stop_source}"
+            ));
+            let stop_margin = 30 + (phrases.len() / 2) * 26;
+            writeln!(
+                f,
+                "Dialogue: 2,{stop_start},{stop_end},Line,,0,0,{stop_margin},,{stop_text}"
+            )?;
         }
         f.flush()?;
     }

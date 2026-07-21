@@ -35,6 +35,7 @@ pub fn serialize_session_v3(phrases: &[Phrase], vol: f32) -> String {
             out.push_str(&format!("J|{}|{}|{}\n", p.id, j.target_id, j.times));
         } else if let Some(ctrl) = p.control {
             match ctrl {
+                ControlSpec::Stop => out.push_str(&format!("T|{}|stop\n", p.id)),
                 ControlSpec::SetBpm(v) => out.push_str(&format!("B|{}|{}\n", p.id, v)),
                 ControlSpec::SetSustain(v) => out.push_str(&format!("S|{}|{}\n", p.id, v)),
                 ControlSpec::SetVcf(_) => {

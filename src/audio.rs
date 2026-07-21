@@ -531,7 +531,13 @@ fn tick_sequencer(
         }
         let control = phrases[*cur_phrase].phrase.control;
         if let Some(ctrl) = control {
+            if matches!(ctrl, ControlSpec::Stop) {
+                *cur_phrase = (*cur_phrase + 1) % phrases.len();
+                crate::CUR_PHRASE.store(*cur_phrase, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
             let pending = match ctrl {
+                ControlSpec::Stop => unreachable!(),
                 ControlSpec::SetBpm(v) => PendingControl::SetBpm(v),
                 ControlSpec::SetSustain(v) => PendingControl::SetSustain(v),
                 ControlSpec::SetVcf(v) => PendingControl::SetVcf(v),

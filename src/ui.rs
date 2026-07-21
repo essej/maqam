@@ -362,6 +362,12 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             }
 
             if phrase.control.is_some() {
+                let status = if matches!(phrase.control, Some(crate::sequencer::ControlSpec::Stop))
+                {
+                    "[stop]"
+                } else {
+                    "[settings]"
+                };
                 let mut spans = vec![
                     Span::styled(
                         marker,
@@ -375,7 +381,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 spans.extend(jump_prefix.clone());
                 spans.extend(vec![
                     Span::styled(
-                        format!("{:<status_width$} ", "[settings]"),
+                        format!("{status:<status_width$} "),
                         Style::default().fg(state_color).bg(BG),
                     ),
                     Span::styled(

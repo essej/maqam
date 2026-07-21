@@ -104,7 +104,8 @@ i <id> <command>                     insert before id
 edit <id> <command>                  replace an entry
 x <id> [id ...]                      delete entries
 up <id> / down <id>                  move an entry one slot
-rot                                  move the last entry to the front
+rot                                  move the first entry to the end
+stop                                 add a renderer stop line
 ```
 
 Examples:
@@ -246,6 +247,7 @@ B|id|bpm
 S|id|sustain
 V|id|vcf command
 F|id|fx command
+T|id|stop
 vol <n>
 create <Name> <ratio> ...
 ```

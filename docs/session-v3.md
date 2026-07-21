@@ -33,6 +33,7 @@ B|0|180              bpm control line, id 0, bpm 180
 S|1|1.2              sustain control line, id 1, 1.2 seconds
 P|2|1|g hijaz 4444   playable phrase, id 2, repeat 1, source command
 J|3|2|3              jump line, id 3, target id 2, jump count 3
+T|4|stop             renderer stop line, id 4
 ```
 
 The renderer source of truth is the loaded `Vec<Phrase>`, not the raw `.mq` text.

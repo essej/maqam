@@ -151,6 +151,7 @@ pub enum Cmd {
     },
     DeleteBars(Vec<isize>),
     Rotate,
+    Stop,
     SetBpm(ValueChange),
     SetSustain(ValueChange),
     SetVcf(VcfChange),
@@ -194,6 +195,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         "?" | "help" => return Ok(Cmd::Help),
         "clear" => return Ok(Cmd::Clear),
         "rot" => return Ok(Cmd::Rotate),
+        "stop" => return Ok(Cmd::Stop),
         "m" => return Ok(Cmd::Record(1)),
         _ => {}
     }
