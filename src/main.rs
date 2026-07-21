@@ -19,6 +19,8 @@ mod vcf;
 
 /// Shared atomic: audio thread writes current phrase index, TUI reads it.
 pub static CUR_PHRASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static NEXT_PHRASE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(usize::MAX);
 pub static CUR_SUBDIV: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static CUR_PLAYS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static CUR_JUMP_REM: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

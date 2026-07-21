@@ -85,6 +85,7 @@ impl ValueChange {
 #[allow(dead_code)]
 pub enum Cmd {
     AddPhrase {
+        source: String,
         specs: Vec<JinsSpec>,
         repeat: usize,
     },
@@ -94,6 +95,7 @@ pub enum Cmd {
     },
     Insert {
         before: isize,
+        source: String,
         specs: Vec<JinsSpec>,
         repeat: usize,
     },
@@ -117,6 +119,7 @@ pub enum Cmd {
     MoveDown(isize),
     Edit {
         id: isize,
+        source: String,
         specs: Vec<JinsSpec>,
         repeat: usize,
     },
@@ -273,7 +276,16 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         }
 
         return match parse(rest)? {
-            Cmd::AddPhrase { specs, repeat } => Ok(Cmd::Edit { id, specs, repeat }),
+            Cmd::AddPhrase {
+                source,
+                specs,
+                repeat,
+            } => Ok(Cmd::Edit {
+                id,
+                source,
+                specs,
+                repeat,
+            }),
             Cmd::Jump { to, times } => Ok(Cmd::EditJump { id, to, times }),
             Cmd::SetBpm(change) => Ok(Cmd::EditBpm { id, change }),
             Cmd::SetSustain(change) => Ok(Cmd::EditSustain { id, change }),
@@ -322,8 +334,13 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         }
 
         return match parse(rest)? {
-            Cmd::AddPhrase { specs, repeat } => Ok(Cmd::Insert {
+            Cmd::AddPhrase {
+                source,
+                specs,
+                repeat,
+            } => Ok(Cmd::Insert {
                 before,
+                source,
                 specs,
                 repeat,
             }),
@@ -496,6 +513,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         .map(|p| parse_jins_spec(p.trim()))
         .collect();
     Ok(Cmd::AddPhrase {
+        source: input.trim().to_string(),
         specs: specs?,
         repeat,
     })

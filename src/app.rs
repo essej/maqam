@@ -430,6 +430,7 @@ impl App {
 
             Cmd::Insert {
                 before,
+                source,
                 specs,
                 repeat,
             } => {
@@ -448,14 +449,9 @@ impl App {
                     self.last_rhythm = r.groups.clone();
                 }
                 let peak = 4usize;
-                let src = resolved
-                    .iter()
-                    .map(|s| s.src.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
                 let id = self.next_phrase_id;
                 self.next_phrase_id += 1;
-                let phrase = build_phrase(id, src, resolved, peak, repeat.max(1));
+                let phrase = build_phrase(id, source, resolved, peak, repeat.max(1));
                 let pos = match self.resolve_id_ref(before) {
                     Some(before_id) => self
                         .phrases
@@ -903,7 +899,12 @@ impl App {
                 self.message = Some(format!("edited {id} → jump to {to} ×{times}"));
             }
 
-            Cmd::Edit { id, specs, repeat } => {
+            Cmd::Edit {
+                id,
+                source,
+                specs,
+                repeat,
+            } => {
                 let Some(id) = self.resolve_id_ref(id) else {
                     self.message = Some(format!("✗ no phrase id {id}"));
                     return;
@@ -929,12 +930,7 @@ impl App {
                 if let Some(r) = resolved.last() {
                     self.last_rhythm = r.groups.clone();
                 }
-                let src = resolved
-                    .iter()
-                    .map(|s| s.src.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let mut phrase = build_phrase(id, src, resolved, 4, repeat.max(1));
+                let mut phrase = build_phrase(id, source, resolved, 4, repeat.max(1));
                 phrase.id = id;
                 self.phrases[pos] = phrase.clone();
                 let _ = self.audio_tx.send(AudioCmd::ReplacePhrase(phrase));
@@ -1082,7 +1078,11 @@ impl App {
                 }
             }
 
-            Cmd::AddPhrase { specs, repeat } => {
+            Cmd::AddPhrase {
+                source,
+                specs,
+                repeat,
+            } => {
                 if specs.is_empty() {
                     self.message = Some("✗ empty phrase".into());
                     return;
@@ -1104,14 +1104,9 @@ impl App {
                     let count = self.phrases.len().max(1);
                     (total / count / 2).clamp(2, 4)
                 };
-                let src = resolved
-                    .iter()
-                    .map(|s| s.src.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
                 let id = self.next_phrase_id;
                 self.next_phrase_id += 1;
-                let phrase = build_phrase(id, src, resolved, peak, repeat.max(1));
+                let phrase = build_phrase(id, source, resolved, peak, repeat.max(1));
                 let _ = self.audio_tx.send(AudioCmd::AddPhrase(phrase.clone()));
                 self.phrases.push(phrase);
                 self.message = None;
@@ -1573,7 +1568,7 @@ impl App {
                 let parsed =
                     command::parse(&cmd_src).map_err(|e| format!("line {line_no}: {e}"))?;
                 let (specs, rep) = match parsed {
-                    Cmd::AddPhrase { specs, repeat } => (specs, repeat),
+                    Cmd::AddPhrase { specs, repeat, .. } => (specs, repeat),
                     _ => return Err(format!("line {line_no}: expected phrase command")),
                 };
                 let resolved = resolve_rhythms(specs, &last_rhythm)
@@ -1685,18 +1680,17 @@ impl App {
                 Cmd::SetVol(v) => {
                     new_vol = v;
                 }
-                Cmd::AddPhrase { specs, repeat } => {
+                Cmd::AddPhrase {
+                    source,
+                    specs,
+                    repeat,
+                } => {
                     let resolved = resolve_rhythms(specs, &last_rhythm)
                         .map_err(|e| format!("line {line_no}: {e}"))?;
                     if let Some(r) = resolved.last() {
                         last_rhythm = r.groups.clone();
                     }
-                    let src = resolved
-                        .iter()
-                        .map(|s| s.src.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let phrase = build_phrase(next_id, src, resolved, 4, repeat.max(1));
+                    let phrase = build_phrase(next_id, source, resolved, 4, repeat.max(1));
                     next_id += 1;
                     loaded.push(phrase);
                 }
@@ -2106,6 +2100,17 @@ mod tests {
     fn session_test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn phrase_display_source_preserves_the_users_text() {
+        let (tx, _rx) = bounded(8);
+        let mut app = App::new(tx);
+
+        app.handle_command("d nah 332,   a hij 44 r3");
+
+        assert_eq!(app.phrases[0].src, "d nah 332,   a hij 44 r3");
+        assert_eq!(app.phrases[0].repeat, 3);
     }
 
     #[test]

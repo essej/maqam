@@ -22,7 +22,6 @@ const ACCENT: Color = Color::Rgb(0, 255, 0);
 const DIM: Color = Color::Rgb(0, 180, 0);
 const CMD: Color = Color::Rgb(0, 255, 0);
 const ERR: Color = Color::Rgb(255, 80, 80);
-const MAQAM: Color = Color::Rgb(0, 200, 0);
 const REPEAT: Color = Color::Rgb(0, 255, 0);
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -179,6 +178,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     };
     let cur_sub = crate::CUR_SUBDIV.load(std::sync::atomic::Ordering::Relaxed);
     let cur_plays = crate::CUR_PLAYS.load(std::sync::atomic::Ordering::Relaxed);
+    let next = crate::NEXT_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
     let n = app.phrases.len().max(1);
 
     let items: Vec<ListItem> = app
@@ -187,6 +187,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .enumerate()
         .map(|(idx, phrase)| {
             let playing = !app.paused && idx == cur % n;
+            let is_next = !app.paused && !playing && idx == next;
             let id_str = format!("{:>2}: ", phrase.id);
             let marker = if playing { "▶ " } else { "  " };
 
@@ -206,9 +207,11 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 let col_src = if !valid_target {
                     Color::Rgb(255, 80, 80)
                 } else if playing {
-                    Color::Rgb(255, 210, 80) // bright amber when active
+                    Color::Rgb(80, 255, 120)
+                } else if is_next {
+                    Color::Rgb(90, 160, 255)
                 } else {
-                    Color::Rgb(110, 95, 40) // dim amber otherwise
+                    Color::Rgb(105, 105, 105)
                 };
                 let col_ctr = if !valid_target {
                     Color::Rgb(255, 120, 120)
@@ -257,9 +260,11 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
             if phrase.control.is_some() {
                 let col = if playing {
-                    Color::Rgb(120, 220, 255)
+                    Color::Rgb(80, 255, 120)
+                } else if is_next {
+                    Color::Rgb(90, 160, 255)
                 } else {
-                    Color::Rgb(70, 120, 140)
+                    Color::Rgb(105, 105, 105)
                 };
                 return ListItem::new(Line::from(vec![
                     Span::styled(
@@ -283,12 +288,13 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
             let src_str = format!("{:<28}", phrase.src);
             let rhythm = phrase.rhythm_display();
-            let maqam_str = phrase.bar.ratio_strs.join(" | ");
 
             let (fg_id, fg_src) = if playing {
-                (ACCENT, Color::Rgb(255, 255, 180))
+                (Color::Rgb(80, 255, 120), Color::Rgb(80, 255, 120))
+            } else if is_next {
+                (Color::Rgb(90, 160, 255), Color::Rgb(90, 160, 255))
             } else {
-                (DIM, ACCENT)
+                (DIM, Color::Rgb(105, 105, 105))
             };
 
             let mut spans = vec![
@@ -313,12 +319,14 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         .bg(Color::Rgb(255, 255, 255))
                         .add_modifier(Modifier::BOLD)
                 } else if playing {
-                    // Playing phrase, other beats: dim green so active stands out
+                    // Current phrase, other beats: green so active stands out.
                     let col = match ch {
-                        'X' => Color::Rgb(0, 160, 0),
-                        _ => Color::Rgb(0, 100, 0),
+                        'X' => Color::Rgb(40, 210, 80),
+                        _ => Color::Rgb(30, 150, 60),
                     };
                     Style::default().fg(col).bg(BG)
+                } else if is_next {
+                    Style::default().fg(Color::Rgb(70, 130, 220)).bg(BG)
                 } else {
                     // Inactive phrase: gray
                     Style::default().fg(Color::Rgb(80, 80, 80)).bg(BG)
@@ -340,15 +348,6 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Style::default().fg(REPEAT).bg(BG),
                 ));
             }
-
-            spans.push(Span::styled(
-                format!("  {maqam_str}"),
-                Style::default().fg(MAQAM).bg(BG).add_modifier(if playing {
-                    Modifier::empty()
-                } else {
-                    Modifier::DIM
-                }),
-            ));
 
             ListItem::new(Line::from(spans))
         })

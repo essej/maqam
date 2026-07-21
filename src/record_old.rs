@@ -53,40 +53,6 @@ fn yield_to_audio_thread(rendered_samples: usize) {
     }
 }
 
-fn phrase_display_title(src: &str) -> String {
-    let title = src
-        .split(',')
-        .filter_map(|part| {
-            let tokens: Vec<&str> = part
-                .split_whitespace()
-                .filter(|token| {
-                    !token.chars().all(|c| c.is_ascii_digit()) && !token.starts_with('r')
-                })
-                .collect();
-            match tokens.as_slice() {
-                [root, maqam, ..] => Some(format!(
-                    "{} {}",
-                    root.to_ascii_uppercase(),
-                    maqam.to_ascii_uppercase()
-                )),
-                [maqam] => Some(maqam.to_ascii_uppercase()),
-                _ => None,
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("+");
-    if title.is_empty() {
-        src.split_whitespace()
-            .filter(|token| !token.chars().all(|c| c.is_ascii_digit()))
-            .take(3)
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_ascii_uppercase()
-    } else {
-        title
-    }
-}
-
 #[derive(Clone, Copy)]
 struct RenderOccurrence {
     phrase_idx: usize,
@@ -823,6 +789,7 @@ pub fn record_cycle(
         let mut sample = 0usize;
         for (i, entry) in full_seq.iter().enumerate() {
             let phrase_idx = entry.phrase_idx;
+            let next_phrase_idx = full_seq.get(i + 1).map(|next| next.phrase_idx);
             let play_num = entry.play_num;
             let snap_idx = entry.snap_idx;
             let bs = bar_samples_for(phrase_idx, entry.bpm);
@@ -856,6 +823,13 @@ pub fn record_cycle(
             let mut margin_v = 30usize;
             for (pi, p) in phrases.iter().enumerate() {
                 let active = p.jump.is_none() && pi == phrase_idx;
+                let color = if active {
+                    "{\\1c&H0000FF00&}"
+                } else if Some(pi) == next_phrase_idx {
+                    "{\\1c&H00FF0000&}"
+                } else {
+                    "{\\1c&H00909090&}"
+                };
                 let id = format!("{:>3}", p.id);
                 if let Some(js) = &p.jump {
                     let snap = one_cycle_snaps.get(snap_idx % one_cycle_snaps.len().max(1));
@@ -864,15 +838,14 @@ pub fn record_cycle(
                         .copied()
                         .unwrap_or((0, js.times));
                     let counter = format!("[{}/{}]", pass.min(total), total);
-                    let text = format!("- {id}: {:<20} {}", p.src, counter);
+                    let text = format!("{color}- {id}: {:<20} {}", p.src, counter);
                     writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if p.control.is_some() {
-                    let text = format!("- {id}: {}", p.src);
+                    let text = format!("{color}- {id}: {}", p.src);
                     writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if active {
-                    let label = phrase_display_title(&p.src);
+                    let label = &p.src;
                     let rhythm_plain = p.bar.rhythm_display();
-                    let maqam_str = p.bar.ratio_strs.join(" | ");
                     let ctr = format!("[{}/{}]", play_num + 1, p.repeat.max(1));
                     let n = p.bar.events.len().max(1);
                     for si in 0..n {
@@ -888,30 +861,23 @@ pub fn record_cycle(
                         }
                         let pad = " ".repeat(10usize.saturating_sub(rhythm_plain.chars().count()));
                         let repeat_display = if si == 0 { ctr.as_str() } else { "" };
-                        let body = format!(
-                            "{:<20} {}{} {:<16} {:<7}",
-                            label, rhy, pad, maqam_str, repeat_display
-                        );
-                        let text = format!("▶ {id}: {body}");
+                        let body = format!("{:<28} {}{} {:<7}", label, rhy, pad, repeat_display);
+                        let text = format!("{color}▶ {id}: {body}");
                         writeln!(f, "Dialogue: 0,{ts0},{ts1},Line,,0,0,{margin_v},,{text}")?;
                     }
                     let phrase_end_s = start_s + n as f64 * subdiv_secs;
                     if phrase_end_s < end_s {
                         let ts0 = fmt_t(phrase_end_s);
-                        let body = format!(
-                            "{:<20} {:<10} {:<16} {}",
-                            label, rhythm_plain, maqam_str, ctr
-                        );
-                        let text = format!("> {id}: {body}");
+                        let body = format!("{:<28} {:<10} {}", label, rhythm_plain, ctr);
+                        let text = format!("{color}> {id}: {body}");
                         writeln!(f, "Dialogue: 0,{ts0},{t1},Line,,0,0,{margin_v},,{text}")?;
                     }
                 } else {
-                    let label = phrase_display_title(&p.src);
+                    let label = &p.src;
                     let rhythm = p.bar.rhythm_display();
-                    let maqam_str = p.bar.ratio_strs.join(" | ");
                     let ctr = format!("[1/{}]", p.repeat.max(1));
-                    let body = format!("{:<20} {:<10} {:<16} {}", label, rhythm, maqam_str, ctr);
-                    let text = format!("- {id}: {body}");
+                    let body = format!("{:<28} {:<10} {}", label, rhythm, ctr);
+                    let text = format!("{color}- {id}: {body}");
                     writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 }
                 margin_v += line_h;

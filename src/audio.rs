@@ -556,11 +556,11 @@ fn tick_sequencer(
     // Look ahead: simulate what the sequencer will actually do next.
     // Must check jump counters — a live jump loops back (same phrase),
     // an exhausted jump falls through to the next musical phrase.
-    let next_is_different = {
+    let computed_next = {
         let curr_id = phrases[*cur_phrase].phrase.id;
         let n = phrases.len();
         let mut pos = (*cur_phrase + 1) % n;
-        let mut result = false;
+        let mut result = None;
         for _ in 0..n {
             let p = &phrases[pos].phrase;
             if let Some(js) = &p.jump {
@@ -573,18 +573,18 @@ fn tick_sequencer(
                         .iter()
                         .position(|pp| pp.phrase.id == js.target_id)
                         .unwrap_or(0);
-                    result = phrases[target].phrase.id != curr_id;
+                    result = Some(target);
                     break;
                 }
                 pos = (pos + 1) % n;
             } else if p.control.is_some() {
                 pos = (pos + 1) % n;
             } else {
-                result = p.id != curr_id;
+                result = Some(pos);
                 break;
             }
         }
-        result
+        result.filter(|&next| phrases[next].phrase.id != curr_id)
     };
 
     let pp = &mut phrases[*cur_phrase];
@@ -599,6 +599,13 @@ fn tick_sequencer(
 
     let is_last_play = pp.plays_done + 1 >= pp.phrase.repeat;
     let is_last_subdiv = curr + 1 >= bar.total_subdivs;
+    let next_phrase = if is_last_play {
+        computed_next.unwrap_or(*cur_phrase)
+    } else {
+        *cur_phrase
+    };
+    crate::NEXT_PHRASE.store(next_phrase, std::sync::atomic::Ordering::Relaxed);
+    let next_is_different = next_phrase != *cur_phrase;
 
     let mut milestone = Milestone::None;
     let ev = if bs.last_subdiv != Some(curr) {
