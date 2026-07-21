@@ -856,7 +856,7 @@ pub fn record_cycle(
         writeln!(f,"Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,Strikeout,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding")?;
         writeln!(f,"Style: Line,Menlo,24,&H00A0FF70,&H00A0FF70,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,4,1,7,20,20,10,1")?;
         writeln!(f,"Style: URL,Arial,20,&H0078DD78,&H0078DD78,&H00102004,&H00102004,-1,0,0,0,110,102,0,0,1,3,1,1,20,20,38,1")?;
-        writeln!(f,"Style: ArcCounter,Menlo,18,&H00AAFFD8,&H00AAFFD8,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,3,1,5,0,0,0,1")?;
+        writeln!(f,"Style: JumpCounter,Menlo,18,&H00909090,&H00909090,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,3,1,5,0,0,0,1")?;
         writeln!(f, "[Events]")?;
         writeln!(
             f,
@@ -898,11 +898,7 @@ pub fn record_cycle(
                 .map_or(phrase.repeat.max(1), |jump| jump.times);
             width.max(format!("[{total}/{total}]").len())
         });
-        let rhythm_counters: HashMap<(usize, usize), crate::carpet::RhythmCounterLayout> =
-            crate::carpet::rhythm_counter_layout(&phrases)
-                .into_iter()
-                .map(|counter| ((counter.phrase_id, counter.score_tick), counter))
-                .collect();
+        let jump_counter_positions = crate::carpet::jump_counter_layout(&phrases);
         for (i, entry) in full_seq.iter().enumerate() {
             let phrase_idx = entry.phrase_idx;
             let next_phrase_idx = full_seq[i + 1..]
@@ -933,15 +929,39 @@ pub fn record_cycle(
                 entry.sustain,
                 cycle_disp
             );
-            writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,0,,{hdr}")?;
+            writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,0,,{hdr}")?;
             writeln!(
                 f,
-                "Dialogue: 0,{t0},{t1},URL,,0,0,0,,https://github.com/rfielding/maqam"
+                "Dialogue: 2,{t0},{t1},URL,,0,0,0,,https://github.com/rfielding/maqam"
             )?;
             let subdiv_secs = 60.0 / (entry.bpm * 2.0);
             let line_h = 26usize;
             let mut margin_v = 30usize;
             let snap = one_cycle_snaps.get(snap_idx % one_cycle_snaps.len().max(1));
+            for counter in &jump_counter_positions {
+                let Some(jump) = phrases
+                    .iter()
+                    .find(|phrase| phrase.id == counter.jump_id)
+                    .and_then(|phrase| phrase.jump.as_ref())
+                else {
+                    continue;
+                };
+                let (pass, total) = snap
+                    .and_then(|state| state.get(&counter.jump_id))
+                    .copied()
+                    .unwrap_or((1, jump.times));
+                let counter_text = format!(
+                    "{{\\pos({:.0},{:.0})}}[{}/{}]",
+                    counter.x,
+                    counter.y,
+                    pass.min(total),
+                    total
+                );
+                writeln!(
+                    f,
+                    "Dialogue: 1,{t0},{t1},JumpCounter,,0,0,0,,{counter_text}"
+                )?;
+            }
             let upcoming_jump_source = {
                 let mut position = (phrase_idx + 1) % phrases.len().max(1);
                 let mut found = None;
@@ -1056,7 +1076,7 @@ pub fn record_cycle(
                         p.display_src()
                     );
                     let text = preserve_row_spaces(text);
-                    writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
+                    writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if p.control.is_some() {
                     let text = format!(
                         "{color}{marker}{id}{jump_prefix}{:<status_width$} {}",
@@ -1064,7 +1084,7 @@ pub fn record_cycle(
                         p.display_src()
                     );
                     let text = preserve_row_spaces(text);
-                    writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
+                    writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if active {
                     let label = p.display_src();
                     let rhythm_plain = p.bar.rhythm_display();
@@ -1084,19 +1104,7 @@ pub fn record_cycle(
                         let body = format!("{ctr:<status_width$} {:<28} {}", label, rhy);
                         let text = format!("{color}{marker}{id}{jump_prefix}{body}");
                         let text = preserve_row_spaces(text);
-                        writeln!(f, "Dialogue: 0,{ts0},{ts1},Line,,0,0,{margin_v},,{text}")?;
-                        if let Some(counter) =
-                            rhythm_counters.get(&(p.id, si % p.bar.events.len().max(1)))
-                        {
-                            let counter_text = format!(
-                                "{{\\pos({:.0},{:.0})}}{}/{}",
-                                counter.x, counter.y, counter.value, counter.limit
-                            );
-                            writeln!(
-                                f,
-                                "Dialogue: 1,{ts0},{ts1},ArcCounter,,0,0,0,,{counter_text}"
-                            )?;
-                        }
+                        writeln!(f, "Dialogue: 2,{ts0},{ts1},Line,,0,0,{margin_v},,{text}")?;
                     }
                     let phrase_end_s = start_s + n as f64 * subdiv_secs;
                     if phrase_end_s < end_s {
@@ -1104,7 +1112,7 @@ pub fn record_cycle(
                         let body = format!("{ctr:<status_width$} {:<28} {}", label, rhythm_plain);
                         let text = format!("{color}{marker}{id}{jump_prefix}{body}");
                         let text = preserve_row_spaces(text);
-                        writeln!(f, "Dialogue: 0,{ts0},{t1},Line,,0,0,{margin_v},,{text}")?;
+                        writeln!(f, "Dialogue: 2,{ts0},{t1},Line,,0,0,{margin_v},,{text}")?;
                     }
                 } else {
                     let label = p.display_src();
@@ -1120,7 +1128,7 @@ pub fn record_cycle(
                     let body = format!("{ctr} {:<28} {}", label, rhythm);
                     let text = format!("{color}{marker}{id}{jump_prefix}{body}");
                     let text = preserve_row_spaces(text);
-                    writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
+                    writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 }
                 margin_v += line_h;
             }

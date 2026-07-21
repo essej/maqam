@@ -644,6 +644,10 @@ fn tick_sequencer(
         evolve_bar(&mut pp.phrase.bar, true);
         if pp.plays_done >= pp.phrase.repeat {
             pp.plays_done = 0;
+            // Publish the reset before the following zero-duration control or
+            // jump entries are evaluated.  The UI is one-based, so zero here
+            // means the next counter is visibly entered at [1/n].
+            crate::CUR_PLAYS.store(0, std::sync::atomic::Ordering::Relaxed);
             let prev = *cur_phrase;
             *cur_phrase = (*cur_phrase + 1) % phrases.len();
             crate::CUR_PHRASE.store(*cur_phrase, std::sync::atomic::Ordering::Relaxed);
