@@ -680,8 +680,8 @@ impl App {
                 if self.phrases.len() < 2 {
                     self.message = Some("nothing to rotate".into());
                 } else {
-                    let last = self.phrases.pop().unwrap();
-                    self.phrases.insert(0, last);
+                    let first = self.phrases.remove(0);
+                    self.phrases.push(first);
                     let _ = self.audio_tx.send(AudioCmd::Rotate);
                     self.message = None;
                 }

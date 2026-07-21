@@ -289,7 +289,11 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             let marker = if playing {
                 "▶ "
             } else if is_next {
-                "▷ "
+                if current_is_last_repeat {
+                    "▸ "
+                } else {
+                    "▷ "
+                }
             } else {
                 "  "
             };
@@ -390,6 +394,8 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             let total_plays = phrase.repeat.max(1);
             let displayed_play = if playing {
                 (cur_plays + 1).min(total_plays)
+            } else if is_next {
+                total_plays
             } else {
                 1
             };

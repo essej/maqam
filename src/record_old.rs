@@ -159,7 +159,8 @@ fn build_carpet_tick_highlights(
     let score = crate::carpet::WeaveScore::from_phrases(phrases);
     let layout = crate::carpet::score_border_layout(&score);
     let positions: HashMap<(usize, usize), crate::carpet::BorderTickLayout> = layout
-        .into_iter()
+        .iter()
+        .copied()
         .map(|tick| ((tick.phrase_id, tick.score_tick), tick))
         .collect();
     let tick_counts: HashMap<usize, usize> = score
@@ -172,12 +173,66 @@ fn build_carpet_tick_highlights(
     // Giving every visit its own drawbox creates a deeply chained ffmpeg graph
     // which can crash with SIGBUS while being configured on macOS.  Keep one
     // drawbox per visual cell and combine all of its active time ranges.
-    let mut ranges: HashMap<(i32, i32, i32, i32, &'static str), Vec<(f64, f64)>> = HashMap::new();
+    let mut ranges: HashMap<(u8, i32, i32, i32, i32, &'static str), Vec<(f64, f64)>> =
+        HashMap::new();
+    let total_secs = full_seq
+        .iter()
+        .map(|entry| bar_samples_for(entry.phrase_idx, entry.bpm))
+        .sum::<usize>() as f64
+        / SR;
+    // Base score cells are neutral. Dynamic phrase state is layered over them
+    // below: next phrase first, then the current subdivision.
+    for tick in &layout {
+        let outer = if tick.is_kick { 18 } else { 13 };
+        let inner = if tick.is_kick { 9 } else { 7 };
+        let xo = tick.x.round() as i32 - outer / 2;
+        let yo = tick.y.round() as i32 - outer / 2;
+        let xi = tick.x.round() as i32 - inner / 2;
+        let yi = tick.y.round() as i32 - inner / 2;
+        ranges
+            .entry((0, xo, yo, outer, outer, "0x666666@0.72"))
+            .or_default()
+            .push((0.0, total_secs));
+        ranges
+            .entry((1, xi, yi, inner, inner, "0xA0A0A0@0.88"))
+            .or_default()
+            .push((0.0, total_secs));
+    }
     let mut sample = 0usize;
-    for entry in full_seq {
+    for (entry_index, entry) in full_seq.iter().enumerate() {
         let phrase = &phrases[entry.phrase_idx];
         let subdiv_secs = 60.0 / (entry.bpm * 2.0);
         let bar_samples = bar_samples_for(entry.phrase_idx, entry.bpm);
+        let entry_start = sample as f64 / SR;
+        let entry_end = (sample + bar_samples) as f64 / SR - 0.0001;
+        let next_phrase_idx = full_seq[entry_index + 1..]
+            .iter()
+            .find(|next| next.phrase_idx != entry.phrase_idx)
+            .or_else(|| {
+                full_seq
+                    .iter()
+                    .find(|next| next.phrase_idx != entry.phrase_idx)
+            })
+            .map(|next| next.phrase_idx);
+        if let Some(next_phrase_idx) = next_phrase_idx {
+            let next_id = phrases[next_phrase_idx].id;
+            for tick in layout.iter().filter(|tick| tick.phrase_id == next_id) {
+                let outer = if tick.is_kick { 18 } else { 13 };
+                let inner = if tick.is_kick { 9 } else { 7 };
+                let xo = tick.x.round() as i32 - outer / 2;
+                let yo = tick.y.round() as i32 - outer / 2;
+                let xi = tick.x.round() as i32 - inner / 2;
+                let yi = tick.y.round() as i32 - inner / 2;
+                ranges
+                    .entry((2, xo, yo, outer, outer, "0x8080FF@0.42"))
+                    .or_default()
+                    .push((entry_start, entry_end));
+                ranges
+                    .entry((3, xi, yi, inner, inner, "0xD0D0FF@0.88"))
+                    .or_default()
+                    .push((entry_start, entry_end));
+            }
+        }
         let score_ticks = tick_counts.get(&phrase.id).copied().unwrap_or(1).max(1);
         for subdivision in 0..phrase.bar.events.len() {
             let score_tick = subdivision % score_ticks;
@@ -186,18 +241,18 @@ fn build_carpet_tick_highlights(
             };
             let start = sample as f64 / SR + subdivision as f64 * subdiv_secs;
             let end = start + subdiv_secs - 0.0001;
-            let outer = if layout.is_kick { 36 } else { 26 };
-            let inner = if layout.is_kick { 18 } else { 13 };
+            let outer = if layout.is_kick { 18 } else { 13 };
+            let inner = if layout.is_kick { 9 } else { 7 };
             let xo = layout.x.round() as i32 - outer / 2;
             let yo = layout.y.round() as i32 - outer / 2;
             let xi = layout.x.round() as i32 - inner / 2;
             let yi = layout.y.round() as i32 - inner / 2;
             ranges
-                .entry((xo, yo, outer, outer, "0x44FF88@0.20"))
+                .entry((4, xo, yo, outer, outer, "0x44FF88@0.20"))
                 .or_default()
                 .push((start, end));
             ranges
-                .entry((xi, yi, inner, inner, "0xD8FFAA@0.82"))
+                .entry((5, xi, yi, inner, inner, "0xD8FFAA@0.82"))
                 .or_default()
                 .push((start, end));
             if subdivision == 0 {
@@ -214,7 +269,7 @@ fn build_carpet_tick_highlights(
                         let x = cell.x.round() as i32 - size / 2;
                         let y = cell.y.round() as i32 - size / 2;
                         ranges
-                            .entry((x, y, size, size, "0xD8B060@0.70"))
+                            .entry((6, x, y, size, size, "0xD8B060@0.70"))
                             .or_default()
                             .push((start, end));
                     }
@@ -227,7 +282,7 @@ fn build_carpet_tick_highlights(
     grouped.sort_by_key(|(style, _)| *style);
     grouped
         .into_iter()
-        .flat_map(|((x, y, w, h, color), ranges)| {
+        .flat_map(|((_layer, x, y, w, h, color), ranges)| {
             ranges
                 .chunks(64)
                 .map(|chunk| {
@@ -801,6 +856,7 @@ pub fn record_cycle(
         writeln!(f,"Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,Strikeout,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding")?;
         writeln!(f,"Style: Line,Menlo,24,&H00A0FF70,&H00A0FF70,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,4,1,7,20,20,10,1")?;
         writeln!(f,"Style: URL,Arial,20,&H0078DD78,&H0078DD78,&H00102004,&H00102004,-1,0,0,0,110,102,0,0,1,3,1,1,20,20,38,1")?;
+        writeln!(f,"Style: ArcCounter,Menlo,18,&H00AAFFD8,&H00AAFFD8,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,3,1,5,0,0,0,1")?;
         writeln!(f, "[Events]")?;
         writeln!(
             f,
@@ -817,6 +873,9 @@ pub fn record_cycle(
             let cs = ((s % 1.0) * 100.0) as u32;
             format!("{hh}:{mm:02}:{ss:02}.{cs:02}")
         };
+        // libass trims leading spaces and may collapse padding used for the
+        // TUI's fixed columns.  ASS hard spaces preserve the exact row string.
+        let preserve_row_spaces = |text: String| text.replace(' ', r"\h");
         let mut sample = 0usize;
         let phrase_positions: HashMap<usize, usize> = phrases
             .iter()
@@ -839,6 +898,11 @@ pub fn record_cycle(
                 .map_or(phrase.repeat.max(1), |jump| jump.times);
             width.max(format!("[{total}/{total}]").len())
         });
+        let rhythm_counters: HashMap<(usize, usize), crate::carpet::RhythmCounterLayout> =
+            crate::carpet::rhythm_counter_layout(&phrases)
+                .into_iter()
+                .map(|counter| ((counter.phrase_id, counter.score_tick), counter))
+                .collect();
         for (i, entry) in full_seq.iter().enumerate() {
             let phrase_idx = entry.phrase_idx;
             let next_phrase_idx = full_seq[i + 1..]
@@ -894,7 +958,31 @@ pub fn record_cycle(
                 }
                 found
             };
-            for (pi, p) in phrases.iter().enumerate() {
+            let display_start =
+                (phrase_idx + phrases.len() - phrases.len() / 2) % phrases.len().max(1);
+            let display_order: Vec<usize> = (0..phrases.len())
+                .map(|offset| (display_start + offset) % phrases.len())
+                .collect();
+            let display_positions: HashMap<usize, usize> = display_order
+                .iter()
+                .enumerate()
+                .map(|(display_position, &original_position)| (original_position, display_position))
+                .collect();
+            let display_jump_routes: Vec<(usize, usize, usize, usize)> = text_jump_routes
+                .iter()
+                .map(|&(target, source, jump_id, times)| {
+                    (
+                        display_positions[&target],
+                        display_positions[&source],
+                        jump_id,
+                        times,
+                    )
+                })
+                .collect();
+            let upcoming_jump_source =
+                upcoming_jump_source.and_then(|source| display_positions.get(&source).copied());
+            for (display_pi, &pi) in display_order.iter().enumerate() {
+                let p = &phrases[pi];
                 let active = p.jump.is_none() && pi == phrase_idx;
                 let color = if active {
                     "{\\1c&H0000FF00&}"
@@ -906,19 +994,25 @@ pub fn record_cycle(
                 // One isolated two-cell marker column.  Keep it outside the
                 // jump lanes and counters so every following field remains on
                 // the same monospaced tab regardless of state.
+                let leaving_current = play_num + 1 >= phrases[phrase_idx].repeat.max(1);
                 let marker_head = if active {
                     '▶'
                 } else if Some(pi) == next_phrase_idx {
-                    '▷'
+                    if leaving_current {
+                        '▸'
+                    } else {
+                        '▷'
+                    }
                 } else {
                     ' '
                 };
                 let marker = format!("{marker_head} ");
                 let id = format!("{:>2}: ", p.id);
-                let jump_prefix: String = text_jump_routes
+                let jump_prefix: String = display_jump_routes
                     .iter()
                     .map(|&(target, source, jump_id, times)| {
-                        let on_path = target.min(source) <= pi && pi <= target.max(source);
+                        let on_path =
+                            target.min(source) <= display_pi && display_pi <= target.max(source);
                         if !on_path {
                             return "    ";
                         }
@@ -927,13 +1021,13 @@ pub fn record_cycle(
                             .copied()
                             .unwrap_or((1, times));
                         let will_jump = Some(source) == upcoming_jump_source && pass < total;
-                        if pi == target {
+                        if display_pi == target {
                             if target < source {
                                 "┌──>"
                             } else {
                                 "└──>"
                             }
-                        } else if pi == source
+                        } else if display_pi == source
                             && will_jump
                             && play_num + 1 >= phrases[phrase_idx].repeat.max(1)
                         {
@@ -961,6 +1055,7 @@ pub fn record_cycle(
                         "{color}{marker}{id}{jump_prefix}{counter}{}{error}",
                         p.display_src()
                     );
+                    let text = preserve_row_spaces(text);
                     writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if p.control.is_some() {
                     let text = format!(
@@ -968,6 +1063,7 @@ pub fn record_cycle(
                         "[settings]",
                         p.display_src()
                     );
+                    let text = preserve_row_spaces(text);
                     writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if active {
                     let label = p.display_src();
@@ -987,21 +1083,43 @@ pub fn record_cycle(
                         }
                         let body = format!("{ctr:<status_width$} {:<28} {}", label, rhy);
                         let text = format!("{color}{marker}{id}{jump_prefix}{body}");
+                        let text = preserve_row_spaces(text);
                         writeln!(f, "Dialogue: 0,{ts0},{ts1},Line,,0,0,{margin_v},,{text}")?;
+                        if let Some(counter) =
+                            rhythm_counters.get(&(p.id, si % p.bar.events.len().max(1)))
+                        {
+                            let counter_text = format!(
+                                "{{\\pos({:.0},{:.0})}}{}/{}",
+                                counter.x, counter.y, counter.value, counter.limit
+                            );
+                            writeln!(
+                                f,
+                                "Dialogue: 1,{ts0},{ts1},ArcCounter,,0,0,0,,{counter_text}"
+                            )?;
+                        }
                     }
                     let phrase_end_s = start_s + n as f64 * subdiv_secs;
                     if phrase_end_s < end_s {
                         let ts0 = fmt_t(phrase_end_s);
                         let body = format!("{ctr:<status_width$} {:<28} {}", label, rhythm_plain);
                         let text = format!("{color}{marker}{id}{jump_prefix}{body}");
+                        let text = preserve_row_spaces(text);
                         writeln!(f, "Dialogue: 0,{ts0},{t1},Line,,0,0,{margin_v},,{text}")?;
                     }
                 } else {
                     let label = p.display_src();
                     let rhythm = p.bar.rhythm_display();
-                    let ctr = format!("[1/{}]", p.repeat.max(1));
-                    let body = format!("{ctr:<status_width$} {:<28} {}", label, rhythm);
+                    let total = p.repeat.max(1);
+                    let is_exit = Some(pi) == next_phrase_idx;
+                    let ctr = if is_exit {
+                        format!("[{total}/{total}]")
+                    } else {
+                        format!("[1/{total}]")
+                    };
+                    let ctr = format!("{ctr:<status_width$}");
+                    let body = format!("{ctr} {:<28} {}", label, rhythm);
                     let text = format!("{color}{marker}{id}{jump_prefix}{body}");
+                    let text = preserve_row_spaces(text);
                     writeln!(f, "Dialogue: 0,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 }
                 margin_v += line_h;

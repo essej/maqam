@@ -70,6 +70,16 @@ pub struct BorderTickLayout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RhythmCounterLayout {
+    pub phrase_id: usize,
+    pub score_tick: usize,
+    pub value: usize,
+    pub limit: usize,
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JumpLinkCell {
     pub jump_id: usize,
     pub x: f32,
@@ -674,6 +684,48 @@ pub fn score_border_layout(score: &WeaveScore) -> Vec<BorderTickLayout> {
     }
     layout
 }
+
+pub fn rhythm_counter_layout(phrases: &[Phrase]) -> Vec<RhythmCounterLayout> {
+    let score = WeaveScore::from_phrases(phrases);
+    let layout = score_border_layout(&score);
+    let mut result = Vec::with_capacity(layout.len());
+    for tick in &layout {
+        let Some(phrase) = score
+            .phrases
+            .iter()
+            .find(|phrase| phrase.phrase_id == tick.phrase_id)
+        else {
+            continue;
+        };
+        let Some(score_tick) = score.ticks.get(phrase.first_tick + tick.score_tick) else {
+            continue;
+        };
+        let Some(tail) = layout.iter().find(|candidate| {
+            if candidate.phrase_id != tick.phrase_id {
+                return false;
+            }
+            score
+                .ticks
+                .get(phrase.first_tick + candidate.score_tick)
+                .is_some_and(|candidate_tick| {
+                    candidate_tick.group_index == score_tick.group_index
+                        && candidate_tick.tick_in_group + 1 == candidate_tick.group_len
+                })
+        }) else {
+            continue;
+        };
+        let p = point_on_circle(BEAT_R + 18.0, tail.end_t);
+        result.push(RhythmCounterLayout {
+            phrase_id: tick.phrase_id,
+            score_tick: tick.score_tick,
+            value: score_tick.tick_in_group + 1,
+            limit: score_tick.group_len,
+            x: p.x,
+            y: p.y,
+        });
+    }
+    result
+}
 fn jump_routes(phrases: &[Phrase], score: &WeaveScore) -> Vec<JumpRoute> {
     let layout = score_border_layout(score);
     let mut bounds = HashMap::new();
@@ -964,7 +1016,7 @@ fn draw_ring_score(buf: &mut [u8], w: usize, score: &WeaveScore) {
             );
         }
     }
-    for tick in layout {
+    for tick in &layout {
         let c = if tick.is_kick {
             [194, 142, 80]
         } else {

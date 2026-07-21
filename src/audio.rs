@@ -274,8 +274,8 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                     AudioCmd::Rotate => {
                         if phrases.len() > 1 {
                             let playing_id = phrases.get(cur_phrase).map(|p| p.phrase.id);
-                            let last = phrases.remove(phrases.len() - 1);
-                            phrases.insert(0, last);
+                            let first = phrases.remove(0);
+                            phrases.push(first);
                             if let Some(pid) = playing_id {
                                 cur_phrase =
                                     phrases.iter().position(|p| p.phrase.id == pid).unwrap_or(0);
