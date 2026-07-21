@@ -1,9 +1,10 @@
 MAQAM_SESSION_V3
 vol 0.8
-V|22|vcf kanun cut 1000 res 0.9 drive 1 wave saw
 V|28|vcf kick off
 V|21|vcf bass cut 1000 res 0.98 drive 1.25 wave squ
-V|29|vcf bass cut +10t res +0.1t drive 2 wave squ
+V|22|vcf kanun cut 1000 res 0.9 drive 1 wave saw
+V|31|vcf bass cut +12t res +0.3t drive 1.24 wave saw
+V|29|vcf kanun cut +13t res +0.3t drive 1.24 wave saw
 B|4|180
 P|1|1|d bayati 4444
 J|2|4|3
@@ -12,5 +13,5 @@ J|17|4|3
 P|24|4|d hijaz, a hijaz 664
 P|26|4|a hijaz, d hijaz 332332
 P|27|4|f saba 62332 r
-J|25|4|4
+J|25|28|4
 T|30|stop
