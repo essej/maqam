@@ -4,6 +4,8 @@ struct Mode {
     frequency: f32,
     coupling: f32,
     targeted: bool,
+    modulation_phase: f32,
+    modulation_rate: f32,
     y1: f32,
     y2: f32,
 }
@@ -31,8 +33,8 @@ impl SympatheticStrings {
             noise_floor: 0.002,
             gate: 0.0,
             wet: 0.65,
-            input_gain: 1.0,
-            decay: 0.97,
+            input_gain: 6.0,
+            decay: 0.99,
             previous_input: 0.0,
         }
     }
@@ -104,6 +106,8 @@ impl SympatheticStrings {
                     frequency,
                     coupling,
                     targeted: true,
+                    modulation_phase: (frequency * 0.071).fract() * TAU,
+                    modulation_rate: 0.08 + (frequency * 0.013).fract() * 0.24,
                     y1: 0.0,
                     y2: 0.0,
                 });
@@ -163,11 +167,17 @@ impl SympatheticStrings {
             // `decay` is retention per millisecond, not per sample. This gives
             // the metal courses an acoustic ring measured in seconds. Upper
             // partials damp somewhat faster than the fundamental.
-            let frequency_damping = (mode.frequency / 440.0).max(0.5).sqrt();
+            mode.modulation_phase =
+                (mode.modulation_phase + TAU * mode.modulation_rate / self.sample_rate) % TAU;
+            // Independent sub-two-cent drift creates the slow movement of many
+            // real metal courses without replacing their exact JI centers.
+            let drift_cents = mode.modulation_phase.sin() * 1.7;
+            let sounding_frequency = mode.frequency * 2.0f32.powf(drift_cents / 1200.0);
+            let frequency_damping = (sounding_frequency / 440.0).max(0.5).sqrt();
             let radius = self
                 .decay
                 .powf(frequency_damping / (self.sample_rate * 0.001));
-            let coefficient = 2.0 * radius * (TAU * mode.frequency / self.sample_rate).cos();
+            let coefficient = 2.0 * radius * (TAU * sounding_frequency / self.sample_rate).cos();
             let drive = if mode.targeted {
                 sustained_excitation * (1.0 - radius) + bridge_strike * 0.003
             } else {
@@ -180,7 +190,10 @@ impl SympatheticStrings {
         }
         // Use a fixed bank normalization so adding the next phrase's strings
         // never turns down a chord that is already ringing.
-        let output = (sum / 8.0 * self.wet).tanh();
+        let raw = sum / 8.0 * self.wet;
+        // A shallow asymmetric-free nonlinearity adds the odd upper partials
+        // associated with a jawari-style buzzing bridge.
+        let output = (raw + (raw * 3.0).tanh() * 0.22).tanh();
         self.modes
             .retain(|mode| mode.targeted || mode.y1.abs().max(mode.y2.abs()) > 0.000_01);
         output

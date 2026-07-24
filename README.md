@@ -93,6 +93,12 @@ begin accepting energy, while strings already ringing retain their accumulated
 energy and decay audibly to zero. The effect therefore follows the composition
 without estimating its structure from the input signal.
 
+The string model uses harmonic metal-string courses, jawari-like nonlinear
+bridge coloration, and independent slow pitch drift around each exact JI
+center. Future score vocabulary can expose sympathetic level, timbre,
+modulation, and freeze as timeline controls rather than requiring pedal-state
+automation outside the composition.
+
 The larger goal is a vocabulary of score-aware effects: processors whose
 tuning, excitation, damping, movement, and transitions can follow written
 musical intent while still operating on a live input stream.
@@ -154,8 +160,8 @@ start              shorthand for z start
 pause              alias for toggling pause/play
 sym / sym on       excite maqam-tuned sympathetic strings from default input
 sym off            disable live-input sympathetic strings
-sym decay <n>      set string retention per millisecond (0.9..0.99999; default 0.97)
-sym gain <n>       set live-input excitation gain (0..512; default 1)
+sym decay <n>      set string retention per millisecond (0.9..0.99999; default 0.99)
+sym gain <n>       set live-input excitation gain (0..512; default 6)
 sym drive <n>      alias for sym gain
 vcf sym ...        filter the sympathetic-string instrument bus
 q / quit           quit
