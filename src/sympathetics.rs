@@ -51,12 +51,12 @@ impl SympatheticStrings {
         }
         for frequency in string_frequencies {
             let mut hz = frequency as f32;
-            // Keep the sympathetic bank above the main instrument's body:
-            // its lowest course begins one octave higher than before.
-            while hz > 0.0 && hz >= 160.0 {
+            // Keep the sympathetic bank well above the main instrument's body:
+            // its lowest course lives in the 320–640 Hz octave.
+            while hz > 0.0 && hz >= 320.0 {
                 hz *= 0.5;
             }
-            while hz > 0.0 && hz < 160.0 {
+            while hz > 0.0 && hz < 320.0 {
                 hz *= 2.0;
             }
             // A metal sympathetic course radiates a family of partials, not
@@ -130,7 +130,12 @@ impl SympatheticStrings {
     }
 
     pub fn process(&mut self, input: f32) -> f32 {
-        let driven_input = (input * self.input_gain).tanh();
+        self.process_with_exciter(input, 0.0)
+    }
+
+    pub fn process_with_exciter(&mut self, live_input: f32, pitched_exciter: f32) -> f32 {
+        let driven_input = (live_input * self.input_gain).tanh();
+        let driven_exciter = pitched_exciter.tanh();
         let magnitude = driven_input.abs();
         self.envelope += (magnitude - self.envelope) * 0.0025;
         let onset = (self.envelope - self.previous_envelope).max(0.0);
@@ -156,7 +161,12 @@ impl SympatheticStrings {
         // The onset term represents broadband mechanical energy crossing the
         // bridge. It lights the whole taraf bank on an attack; pitched input
         // then sustains only the matching strings.
-        let sustained_excitation = (driven_input * 0.72 + edge * 3.5) * self.gate;
+        // The internal pitched exciter deliberately bypasses the broadband
+        // bridge strike. It can sustain only resonances whose frequencies are
+        // actually present in the kanun voice, rather than echoing every note
+        // through the whole bank.
+        let sustained_excitation =
+            (driven_input * 0.72 + edge * 3.5) * self.gate + driven_exciter * 0.5;
         let bridge_strike = onset * 300.0;
 
         if self.modes.is_empty() {
@@ -216,11 +226,11 @@ mod tests {
     #[test]
     fn matching_input_audibly_excites_the_bank() {
         let mut strings = SympatheticStrings::new(48_000.0);
-        strings.set_targets(&[220.0]);
+        strings.set_targets(&[440.0]);
         let mut peak = 0.0f32;
         for sample in 0..48_000 {
             let input = if sample < 12_000 {
-                (TAU * 220.0 * sample as f32 / 48_000.0).sin() * 0.05
+                (TAU * 440.0 * sample as f32 / 48_000.0).sin() * 0.05
             } else {
                 0.0
             };
@@ -234,8 +244,9 @@ mod tests {
         let mut strings = SympatheticStrings::new(48_000.0);
         strings.set_targets(&[220.0]);
 
-        assert!(strings.modes.iter().all(|mode| mode.frequency >= 160.0));
+        assert!(strings.modes.iter().all(|mode| mode.frequency >= 320.0));
         for wanted in [220.0 * 4.0 / 3.0, 220.0 * 3.0 / 2.0] {
+            let wanted = if wanted < 320.0 { wanted * 2.0 } else { wanted };
             assert!(strings
                 .modes
                 .iter()
@@ -262,17 +273,17 @@ mod tests {
     #[test]
     fn retuning_preserves_energy_in_old_strings() {
         let mut strings = SympatheticStrings::new(48_000.0);
-        strings.set_targets(&[220.0]);
+        strings.set_targets(&[440.0]);
         for sample in 0..4_800 {
-            let input = (TAU * 220.0 * sample as f32 / 48_000.0).sin() * 0.1;
+            let input = (TAU * 440.0 * sample as f32 / 48_000.0).sin() * 0.1;
             strings.process(input);
         }
-        strings.set_targets(&[277.0]);
+        strings.set_targets(&[554.0]);
 
         let old = strings
             .modes
             .iter()
-            .find(|mode| (mode.frequency - 220.0).abs() < 1.0)
+            .find(|mode| (mode.frequency - 440.0).abs() < 1.0)
             .expect("old tonic string should remain while ringing");
         assert!(!old.targeted);
         assert!(old.y1.abs().max(old.y2.abs()) > 0.000_01);

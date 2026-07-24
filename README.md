@@ -86,9 +86,10 @@ structure: the exact JI ratios, current and next phrases, timeline controls,
 jumps, repeat counters, and playback position are all explicit.
 
 The `sym` sympathetic-strings box is the first effect in this direction. Live
-audio supplies energy, while the score determines which virtual strings can
-accept that energy. The active phrase tunes them to its exact JI pitches plus
-tonic-related fourth and fifth courses. On a phrase change, newly tuned strings
+audio and the internal kanun voice supply energy, while the score determines
+which virtual strings can accept that energy. The active phrase tunes them one
+octave above the played register, using its exact JI pitches plus tonic-related
+fourth and fifth courses. On a phrase change, newly tuned strings
 begin accepting energy, while strings already ringing retain their accumulated
 energy and decay audibly to zero. The effect therefore follows the composition
 without estimating its structure from the input signal.
