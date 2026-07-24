@@ -1,7 +1,7 @@
 MAQAM_SESSION_V3
 vol 1
 Y|10|sym on
-Y|8|sym gain 2
+Y|8|sym gain 6
 Y|7|sym decay 0.999
 V|4|vcf sym cut 1000 res 0.9 drive 1 wave saw
 V|9|vcf sym cut +25t res +0.2t drive 2 wave saw

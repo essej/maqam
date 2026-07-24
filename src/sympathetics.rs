@@ -130,12 +130,7 @@ impl SympatheticStrings {
     }
 
     pub fn process(&mut self, input: f32) -> f32 {
-        self.process_with_exciter(input, 0.0)
-    }
-
-    pub fn process_with_exciter(&mut self, live_input: f32, pitched_exciter: f32) -> f32 {
-        let driven_input = (live_input * self.input_gain).tanh();
-        let driven_exciter = pitched_exciter.tanh();
+        let driven_input = (input * self.input_gain).tanh();
         let magnitude = driven_input.abs();
         self.envelope += (magnitude - self.envelope) * 0.0025;
         let onset = (self.envelope - self.previous_envelope).max(0.0);
@@ -161,12 +156,7 @@ impl SympatheticStrings {
         // The onset term represents broadband mechanical energy crossing the
         // bridge. It lights the whole taraf bank on an attack; pitched input
         // then sustains only the matching strings.
-        // The internal pitched exciter deliberately bypasses the broadband
-        // bridge strike. It can sustain only resonances whose frequencies are
-        // actually present in the kanun voice, rather than echoing every note
-        // through the whole bank.
-        let sustained_excitation =
-            (driven_input * 0.72 + edge * 3.5) * self.gate + driven_exciter * 0.5;
+        let sustained_excitation = (driven_input * 0.72 + edge * 3.5) * self.gate;
         let bridge_strike = onset * 300.0;
 
         if self.modes.is_empty() {

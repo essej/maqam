@@ -486,7 +486,6 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 let (mut kanun_left, mut kanun_right) = (0f32, 0f32);
                 let (mut kick_left, mut kick_right) = (0f32, 0f32);
                 let (mut tanbura_left, mut tanbura_right) = (0f32, 0f32);
-                let mut kanun_excitation = 0.0f32;
                 for v in voices.iter_mut() {
                     let setting = if vcf.all.enabled {
                         Some(vcf.all)
@@ -497,11 +496,6 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         })
                     };
                     let s = v.sample_with_wave(sr, setting.map(|setting| setting.wave));
-                    if v.kind == VoiceKind::MelodyFm {
-                        // The played kanun bridge is an internal exciter for
-                        // the score-tuned sympathetic courses.
-                        kanun_excitation += s * 0.35;
-                    }
                     let angle = (v.pan + 1.0) * std::f32::consts::FRAC_PI_4;
                     let left = s * angle.cos();
                     let right = s * angle.sin();
@@ -534,7 +528,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 }
                 let sympathetic = if sympathetics_enabled {
                     let live_input = input_rx.try_recv().unwrap_or(0.0);
-                    sympathetics.process_with_exciter(live_input, kanun_excitation)
+                    sympathetics.process(live_input)
                 } else {
                     while input_rx.try_recv().is_ok() {}
                     // Disabling sym closes the bridge to new energy; already
