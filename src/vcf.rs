@@ -50,7 +50,7 @@ impl VcfTarget {
             Self::Bass => "bass",
             Self::Kanun => "kanun",
             Self::Kick => "kick",
-            Self::Tanbura => "tanbura",
+            Self::Tanbura => "sym",
         }
     }
 }

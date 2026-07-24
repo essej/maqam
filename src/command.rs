@@ -678,7 +678,7 @@ fn parse_ratio(s: &str) -> Option<(u32, u32)> {
 }
 
 fn parse_vcf_change(input: &str) -> Result<VcfChange, String> {
-    let usage = "usage: vcf [all|bass|kanun|kick|tanbura] <cutoff> [res] [drive] | vcf [target] off | vcf tanbura cut=<hz|+n|-n|+nt> res=<0..1|+n|-n|+nt> drive=<n|+n|-n|+nt> | cut <hz> | res <0..1> | drive <n>";
+    let usage = "usage: vcf [all|bass|kanun|kick|sym] <cutoff> [res] [drive] | vcf [target] off | vcf sym cut=<hz|+n|-n|+nt> res=<0..1|+n|-n|+nt> drive=<n|+n|-n|+nt> | cut <hz> | res <0..1> | drive <n>";
     let mut toks = input.split_whitespace();
     let head = toks.next().unwrap_or("").to_ascii_lowercase();
     let mut out = VcfChange::default();

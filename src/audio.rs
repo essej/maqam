@@ -468,7 +468,11 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 }
 
                 voices.retain(|v| !v.done);
-                if voices.is_empty() && !fx.active() && !sympathetics_enabled {
+                if voices.is_empty()
+                    && !fx.active()
+                    && !sympathetics_enabled
+                    && !sympathetics.has_energy()
+                {
                     vcf_filters.reset();
                     for sample in frame.iter_mut() {
                         *sample = 0.0;
@@ -526,7 +530,9 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     sympathetics.process(input_rx.try_recv().unwrap_or(0.0))
                 } else {
                     while input_rx.try_recv().is_ok() {}
-                    0.0
+                    // Disabling sym closes the bridge to new energy; already
+                    // ringing strings still decay into the output.
+                    sympathetics.process(0.0)
                 };
                 if vcf.all.enabled {
                     all_left += sympathetic;

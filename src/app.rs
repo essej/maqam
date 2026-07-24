@@ -2502,7 +2502,7 @@ mod tests {
         assert_eq!(app.vcf.tanbura.cutoff_hz, 1800.0);
         assert_eq!(
             app.phrases.last().unwrap().src,
-            "vcf tanbura cut 1800 res 0.7 drive 1.5"
+            "vcf sym cut 1800 res 0.7 drive 1.5"
         );
 
         app.handle_command("vcf bass off");

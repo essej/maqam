@@ -3,7 +3,8 @@
 A real-time terminal sequencer for Arabic maqam music using just intonation
 synthesis. It is built for live-coding short maqam phrases, moving through a
 timeline of phrases and control entries, shaping the sound with per-instrument
-VCF/VCO settings, and rendering the current score to MP4.
+VCF/VCO settings and score-aware effects, and rendering the current score to
+MP4.
 
 ![maqam-live screenshot](screenshot1.png)
 
@@ -75,6 +76,27 @@ snares (`.`).
 
 If a phrase omits rhythm, it inherits the last rhythm used.
 
+### Direction: Context-Aware Effects
+
+maqam-live is moving toward effects units that receive musical context directly
+from the score. A conventional audio effect sees only a waveform and must try to
+reverse engineer pitch, tuning, phrase boundaries, repetition, and likely
+transitions before it can respond musically. This project already knows that
+structure: the exact JI ratios, current and next phrases, timeline controls,
+jumps, repeat counters, and playback position are all explicit.
+
+The `sym` sympathetic-strings box is the first effect in this direction. Live
+audio supplies energy, while the score determines which virtual strings can
+accept that energy. The active phrase tunes them to its exact JI pitches plus
+tonic-related fourth and fifth courses. On a phrase change, newly tuned strings
+begin accepting energy, while strings already ringing retain their accumulated
+energy and decay audibly to zero. The effect therefore follows the composition
+without estimating its structure from the input signal.
+
+The larger goal is a vocabulary of score-aware effects: processors whose
+tuning, excitation, damping, movement, and transitions can follow written
+musical intent while still operating on a live input stream.
+
 ## Commands
 
 ### Phrases
@@ -132,11 +154,10 @@ start              shorthand for z start
 pause              alias for toggling pause/play
 sym / sym on       excite maqam-tuned sympathetic strings from default input
 sym off            disable live-input sympathetic strings
-sym decay <n>      set resonator feedback decay (0.9..0.99999)
-sym gain <n>       set live-input excitation gain (0..512; default 64)
+sym decay <n>      set string retention per millisecond (0.9..0.99999; default 0.97)
+sym gain <n>       set live-input excitation gain (0..512; default 1)
 sym drive <n>      alias for sym gain
-vcf tanbura ...    filter the sympathetic-string instrument bus
-vcf sym ...        alias for vcf tanbura
+vcf sym ...        filter the sympathetic-string instrument bus
 q / quit           quit
 ? / help           show help
 ;                  separate multiple commands on one line
@@ -146,6 +167,8 @@ q / quit           quit
 
 These commands update current state and also append a timeline entry, so they
 can be moved, edited, saved, loaded, and replayed as part of the piece.
+The `sym` on/off, gain/drive, and decay commands above are timeline entries as
+well.
 
 ```text
 bpm <n|+n|-n|*k|/k>                  tempo, range 20..400
@@ -171,14 +194,14 @@ entry.
 
 The VCF is off by default. It is a Moog-ish resonant low-pass filter. The
 filter can be applied to one master mix (`all`) or per instrument (`bass`,
-`kanun`, `kick`). Enabling `all` disables the per-instrument filters. Enabling a
-per-instrument filter disables `all` but leaves other per-instrument filters
-alone.
+`kanun`, `kick`, `sym`). Enabling `all` disables the per-instrument filters.
+Enabling a per-instrument filter disables `all` but leaves other per-instrument
+filters alone.
 
 ```text
 vcf off
 vcf all off
-vcf <all|bass|kanun|kick> off
+vcf <all|bass|kanun|kick|sym> off
 vcf <target> <cutoff> [res] [drive]
 vcf <target> cut=<hz|+n|-n|*k|/k|+nt> res=<n> drive=<n> wave=<shape>
 cut <hz|+n|-n|+nt>
@@ -258,6 +281,7 @@ B|id|bpm
 S|id|sustain
 V|id|vcf command
 F|id|fx command
+Y|id|sym command
 T|id|stop
 vol <n>
 create <Name> <ratio> ...
