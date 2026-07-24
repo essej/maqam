@@ -72,6 +72,9 @@ pub enum ControlSpec {
     SetSustain(f64),
     SetVcf(VcfChange),
     SetFx(FxChange),
+    SetSympathetics(bool),
+    SetSympatheticDecay(f32),
+    SetSympatheticGain(f32),
 }
 
 #[derive(Debug, Clone)]
@@ -396,6 +399,7 @@ pub enum AudioCmd {
     InsertPhrase { pos: usize, phrase: Phrase },
     ReplacePhrase(Phrase),
     Rotate,
+    MovePhrase { id: usize, down: bool },
     SetBpm(f64),
     SetSustain(f64),
     SetVcf(VcfChange),
@@ -407,4 +411,7 @@ pub enum AudioCmd {
     SetPaused(bool),
     SetCurPhrase(usize),
     QueueNextPhrase(usize),
+    SetSympathetics(bool),
+    SetSympatheticDecay(f32),
+    SetSympatheticGain(f32),
 }

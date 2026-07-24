@@ -284,6 +284,48 @@ impl App {
         resolve_id_ref_in_phrases(&self.phrases, id_ref)
     }
 
+    fn insert_sym_control(&mut self, before: isize, src: String, control: ControlSpec) {
+        let insert_pos = match self.resolve_id_ref(before) {
+            Some(before_id) => self
+                .phrases
+                .iter()
+                .position(|phrase| phrase.id == before_id)
+                .unwrap_or(self.phrases.len()),
+            None => {
+                self.message = Some(format!("✗ no phrase id {before}"));
+                return;
+            }
+        };
+        let id = self.next_phrase_id;
+        self.next_phrase_id += 1;
+        let entry = build_control_entry(id, src, control);
+        self.phrases.insert(insert_pos, entry.clone());
+        let _ = self.audio_tx.send(AudioCmd::InsertPhrase {
+            pos: insert_pos,
+            phrase: entry,
+        });
+        self.message = Some(format!("inserted sym at {insert_pos}"));
+    }
+
+    fn replace_sym_control(&mut self, id_ref: isize, src: String, control: ControlSpec) {
+        let Some(id) = self.resolve_id_ref(id_ref) else {
+            self.message = Some(format!("✗ no phrase id {id_ref}"));
+            return;
+        };
+        if self.is_playing_phrase_id(id) {
+            self.message = Some(format!("✗ phrase {id} is playing — cannot edit"));
+            return;
+        }
+        let Some(pos) = self.phrases.iter().position(|phrase| phrase.id == id) else {
+            self.message = Some(format!("✗ no phrase id {id}"));
+            return;
+        };
+        let entry = build_control_entry(id, src, control);
+        self.phrases[pos] = entry.clone();
+        let _ = self.audio_tx.send(AudioCmd::ReplacePhrase(entry));
+        self.message = Some(format!("edited {id} → sym"));
+    }
+
     fn is_playing_phrase_id(&self, id: usize) -> bool {
         if self.paused {
             return false;
@@ -313,6 +355,9 @@ impl App {
                             fx = setting;
                         }
                     }
+                    ControlSpec::SetSympathetics(_)
+                    | ControlSpec::SetSympatheticDecay(_)
+                    | ControlSpec::SetSympatheticGain(_) => {}
                 }
                 continue;
             }
@@ -623,6 +668,30 @@ impl App {
                 self.message = Some(format!("inserted {}", describe_fx(fx)));
             }
 
+            Cmd::InsertSympathetics { before, enabled } => {
+                self.insert_sym_control(
+                    before,
+                    if enabled { "sym on" } else { "sym off" }.into(),
+                    ControlSpec::SetSympathetics(enabled),
+                );
+            }
+
+            Cmd::InsertSympatheticDecay { before, decay } => {
+                self.insert_sym_control(
+                    before,
+                    format!("sym decay {decay}"),
+                    ControlSpec::SetSympatheticDecay(decay),
+                );
+            }
+
+            Cmd::InsertSympatheticGain { before, gain } => {
+                self.insert_sym_control(
+                    before,
+                    format!("sym drive {gain}"),
+                    ControlSpec::SetSympatheticGain(gain),
+                );
+            }
+
             Cmd::TogglePause { start_id } => {
                 if let Some(id) = start_id {
                     let Some(id) = self.resolve_id_ref(id) else {
@@ -701,14 +770,8 @@ impl App {
                     self.message = Some(format!("id {id} is already at top"));
                     return;
                 }
-                let focus_id = if self.paused {
-                    Some(id)
-                } else {
-                    let cur_pos = crate::CUR_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
-                    self.phrases.get(cur_pos).map(|p| p.id).or(Some(id))
-                };
                 self.phrases.swap(pos - 1, pos);
-                self.resync_audio_sequence(focus_id);
+                let _ = self.audio_tx.send(AudioCmd::MovePhrase { id, down: false });
                 self.message = Some(format!("moved {id} up"));
             }
 
@@ -725,14 +788,8 @@ impl App {
                     self.message = Some(format!("id {id} is already at bottom"));
                     return;
                 }
-                let focus_id = if self.paused {
-                    Some(id)
-                } else {
-                    let cur_pos = crate::CUR_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
-                    self.phrases.get(cur_pos).map(|p| p.id).or(Some(id))
-                };
                 self.phrases.swap(pos, pos + 1);
-                self.resync_audio_sequence(focus_id);
+                let _ = self.audio_tx.send(AudioCmd::MovePhrase { id, down: true });
                 self.message = Some(format!("moved {id} down"));
             }
 
@@ -803,6 +860,47 @@ impl App {
                 self.phrases.push(entry.clone());
                 let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry));
                 self.message = Some("stop line added".into());
+            }
+            Cmd::Sympathetics(enabled) => {
+                let id = self.next_phrase_id;
+                self.next_phrase_id += 1;
+                let src = if enabled { "sym on" } else { "sym off" };
+                let entry =
+                    build_control_entry(id, src.into(), ControlSpec::SetSympathetics(enabled));
+                self.phrases.push(entry.clone());
+                let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry));
+                let _ = self.audio_tx.send(AudioCmd::SetSympathetics(enabled));
+                self.message = Some(if enabled {
+                    "sympathetic strings on".into()
+                } else {
+                    "sympathetic strings off".into()
+                });
+            }
+            Cmd::SympatheticDecay(decay) => {
+                let id = self.next_phrase_id;
+                self.next_phrase_id += 1;
+                let entry = build_control_entry(
+                    id,
+                    format!("sym decay {decay}"),
+                    ControlSpec::SetSympatheticDecay(decay),
+                );
+                self.phrases.push(entry.clone());
+                let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry));
+                let _ = self.audio_tx.send(AudioCmd::SetSympatheticDecay(decay));
+                self.message = Some(format!("sym decay {decay:.5}"));
+            }
+            Cmd::SympatheticGain(gain) => {
+                let id = self.next_phrase_id;
+                self.next_phrase_id += 1;
+                let entry = build_control_entry(
+                    id,
+                    format!("sym gain {gain}"),
+                    ControlSpec::SetSympatheticGain(gain),
+                );
+                self.phrases.push(entry.clone());
+                let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry));
+                let _ = self.audio_tx.send(AudioCmd::SetSympatheticGain(gain));
+                self.message = Some(format!("sym gain {gain:.2}"));
             }
             Cmd::SetBpm(change) => {
                 let bpm = match apply_bpm_change(self.bpm, change) {
@@ -1074,6 +1172,30 @@ impl App {
                 self.message = Some(format!("edited {id} → {}", describe_fx(fx)));
             }
 
+            Cmd::EditSympathetics { id, enabled } => {
+                self.replace_sym_control(
+                    id,
+                    if enabled { "sym on" } else { "sym off" }.into(),
+                    ControlSpec::SetSympathetics(enabled),
+                );
+            }
+
+            Cmd::EditSympatheticDecay { id, decay } => {
+                self.replace_sym_control(
+                    id,
+                    format!("sym decay {decay}"),
+                    ControlSpec::SetSympatheticDecay(decay),
+                );
+            }
+
+            Cmd::EditSympatheticGain { id, gain } => {
+                self.replace_sym_control(
+                    id,
+                    format!("sym gain {gain}"),
+                    ControlSpec::SetSympatheticGain(gain),
+                );
+            }
+
             Cmd::DeleteBars(ids) => {
                 let mut not_found = Vec::new();
                 for id_ref in &ids {
@@ -1252,6 +1374,27 @@ impl App {
                             ControlSpec::SetFx(change),
                         ));
                     }
+                    Cmd::Sympathetics(enabled) => {
+                        loaded.push(build_control_entry(
+                            id,
+                            if enabled { "sym on" } else { "sym off" }.into(),
+                            ControlSpec::SetSympathetics(enabled),
+                        ));
+                    }
+                    Cmd::SympatheticDecay(decay) => {
+                        loaded.push(build_control_entry(
+                            id,
+                            format!("sym decay {decay}"),
+                            ControlSpec::SetSympatheticDecay(decay),
+                        ));
+                    }
+                    Cmd::SympatheticGain(gain) => {
+                        loaded.push(build_control_entry(
+                            id,
+                            format!("sym gain {gain}"),
+                            ControlSpec::SetSympatheticGain(gain),
+                        ));
+                    }
                     _ => return Err(format!("line {line_no}: expected control line")),
                 }
                 continue;
@@ -1329,6 +1472,26 @@ impl App {
                         fx_change_src(change),
                         ControlSpec::SetFx(change),
                     ));
+                }
+                Some("Y") if fields.len() == 3 => {
+                    let parsed =
+                        command::parse(&fields[2]).map_err(|e| format!("line {line_no}: {e}"))?;
+                    let (src, control) = match parsed {
+                        Cmd::Sympathetics(enabled) => (
+                            if enabled { "sym on" } else { "sym off" }.to_string(),
+                            ControlSpec::SetSympathetics(enabled),
+                        ),
+                        Cmd::SympatheticDecay(decay) => (
+                            format!("sym decay {decay}"),
+                            ControlSpec::SetSympatheticDecay(decay),
+                        ),
+                        Cmd::SympatheticGain(gain) => (
+                            format!("sym gain {gain}"),
+                            ControlSpec::SetSympatheticGain(gain),
+                        ),
+                        _ => return Err(format!("line {line_no}: expected sym line")),
+                    };
+                    loaded.push(build_control_entry(id, src, control));
                 }
                 Some("V") if (5..=8).contains(&fields.len()) => {
                     let (target, offset) = if fields.len() >= 6 {
@@ -2082,6 +2245,10 @@ fn is_plain_control_line(line: &str) -> bool {
         || line.starts_with("sus ")
         || is_plain_vcf_control_line(line)
         || is_plain_fx_control_line(line)
+        || line
+            .split_whitespace()
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("sym"))
 }
 
 fn is_plain_vcf_control_line(line: &str) -> bool {
@@ -2138,6 +2305,33 @@ mod tests {
     }
 
     #[test]
+    fn inserts_sym_drive_as_a_timeline_control() {
+        let (tx, _rx) = bounded(32);
+        let mut app = App::new(tx);
+        for _ in 0..5 {
+            app.handle_command("d bayati 4");
+        }
+
+        app.handle_command("i 4 sym drive 64");
+
+        assert_eq!(app.phrases[4].id, 5);
+        assert_eq!(app.phrases[4].src, "sym drive 64");
+        assert!(matches!(
+            app.phrases[4].control,
+            Some(ControlSpec::SetSympatheticGain(64.0))
+        ));
+        assert_eq!(app.phrases[5].id, 4);
+
+        app.handle_command("edit 5 sym gain 96");
+        assert_eq!(app.phrases[4].id, 5);
+        assert_eq!(app.phrases[4].src, "sym gain 96");
+        assert!(matches!(
+            app.phrases[4].control,
+            Some(ControlSpec::SetSympatheticGain(96.0))
+        ));
+    }
+
+    #[test]
     fn loads_and_saves_v3_without_rewriting_input() {
         let _guard = session_test_lock();
         let suffix = SystemTime::now()
@@ -2152,6 +2346,9 @@ mod tests {
             "vol 0.75\n",
             "B|4|180\n",
             "S|7|1.2\n",
+            "Y|8|sym on\n",
+            "Y|9|sym gain 64\n",
+            "Y|10|sym decay 0.99\n",
             "P|11|2|g testv3 332\n",
             "J|15|11|3\n",
         );
@@ -2167,16 +2364,31 @@ mod tests {
                 .iter()
                 .map(|phrase| phrase.id)
                 .collect::<Vec<_>>(),
-            vec![4, 7, 11, 15]
+            vec![4, 7, 8, 9, 10, 11, 15]
         );
-        assert_eq!(app.phrases[2].repeat, 2);
-        assert_eq!(app.phrases[3].jump.as_ref().unwrap().target_id, 11);
+        assert!(matches!(
+            app.phrases[2].control,
+            Some(ControlSpec::SetSympathetics(true))
+        ));
+        assert!(matches!(
+            app.phrases[3].control,
+            Some(ControlSpec::SetSympatheticGain(64.0))
+        ));
+        assert!(matches!(
+            app.phrases[4].control,
+            Some(ControlSpec::SetSympatheticDecay(0.99))
+        ));
+        assert_eq!(app.phrases[5].repeat, 2);
+        assert_eq!(app.phrases[6].jump.as_ref().unwrap().target_id, 11);
         assert_eq!(app.next_phrase_id, 16);
 
         app.save_session(output_path.to_str().unwrap()).unwrap();
         let saved = fs::read_to_string(&output_path).unwrap();
         assert!(saved.starts_with("MAQAM_SESSION_V3\n"));
         assert!(saved.contains("B|4|180\n"));
+        assert!(saved.contains("Y|8|sym on\n"));
+        assert!(saved.contains("Y|9|sym gain 64\n"));
+        assert!(saved.contains("Y|10|sym decay 0.99\n"));
         assert!(saved.contains("P|11|2|g testv3 332\n"));
 
         let _ = fs::remove_file(input_path);
@@ -2283,6 +2495,15 @@ mod tests {
         assert!(app.vcf.kick.enabled);
         assert_eq!(app.vcf.kick.target, VcfTarget::Kick);
         assert_eq!(app.vcf.kick.wave, VcoWave::Squ);
+
+        app.handle_command("vcf sym cut=1800 res=0.7 drive=1.5");
+        assert!(app.vcf.tanbura.enabled);
+        assert_eq!(app.vcf.tanbura.target, VcfTarget::Tanbura);
+        assert_eq!(app.vcf.tanbura.cutoff_hz, 1800.0);
+        assert_eq!(
+            app.phrases.last().unwrap().src,
+            "vcf tanbura cut 1800 res 0.7 drive 1.5"
+        );
 
         app.handle_command("vcf bass off");
         assert!(!app.vcf.bass.enabled);

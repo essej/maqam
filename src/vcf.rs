@@ -20,6 +20,7 @@ pub struct VcfBank {
     pub bass: VcfSettings,
     pub kanun: VcfSettings,
     pub kick: VcfSettings,
+    pub tanbura: VcfSettings,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,6 +29,7 @@ pub enum VcfTarget {
     Bass,
     Kanun,
     Kick,
+    Tanbura,
 }
 
 impl VcfTarget {
@@ -37,6 +39,7 @@ impl VcfTarget {
             "bass" | "sub" | "subbass" => Some(Self::Bass),
             "kanun" | "qanun" | "melody" => Some(Self::Kanun),
             "kick" | "kicks" => Some(Self::Kick),
+            "tanbura" | "tambura" | "sym" | "sympathetics" => Some(Self::Tanbura),
             _ => None,
         }
     }
@@ -47,6 +50,7 @@ impl VcfTarget {
             Self::Bass => "bass",
             Self::Kanun => "kanun",
             Self::Kick => "kick",
+            Self::Tanbura => "tanbura",
         }
     }
 }
@@ -130,6 +134,7 @@ impl Default for VcfBank {
             bass: VcfSettings::for_target(VcfTarget::Bass),
             kanun: VcfSettings::for_target(VcfTarget::Kanun),
             kick: VcfSettings::for_target(VcfTarget::Kick),
+            tanbura: VcfSettings::for_target(VcfTarget::Tanbura),
         }
     }
 }
@@ -141,6 +146,7 @@ impl VcfBank {
             VcfTarget::Bass => self.bass,
             VcfTarget::Kanun => self.kanun,
             VcfTarget::Kick => self.kick,
+            VcfTarget::Tanbura => self.tanbura,
         }
     }
 
@@ -153,10 +159,12 @@ impl VcfBank {
                     self.bass.enabled = false;
                     self.kanun.enabled = false;
                     self.kick.enabled = false;
+                    self.tanbura.enabled = false;
                 } else {
                     self.bass.enabled = false;
                     self.kanun.enabled = false;
                     self.kick.enabled = false;
+                    self.tanbura.enabled = false;
                 }
             }
             VcfTarget::Bass => {
@@ -174,6 +182,11 @@ impl VcfBank {
                 setting.target = VcfTarget::Kick;
                 self.kick = setting;
             }
+            VcfTarget::Tanbura => {
+                self.all.enabled = false;
+                setting.target = VcfTarget::Tanbura;
+                self.tanbura = setting;
+            }
         }
     }
 
@@ -183,6 +196,7 @@ impl VcfBank {
             VcfTarget::Bass,
             VcfTarget::Kanun,
             VcfTarget::Kick,
+            VcfTarget::Tanbura,
         ] {
             let mut setting = self.get(target);
             if setting.enabled {
@@ -202,6 +216,7 @@ impl VcfBank {
             VcfTarget::Bass => self.bass = setting,
             VcfTarget::Kanun => self.kanun = setting,
             VcfTarget::Kick => self.kick = setting,
+            VcfTarget::Tanbura => self.tanbura = setting,
         }
     }
 }

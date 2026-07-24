@@ -418,6 +418,9 @@ fn expand_one_cycle(
                         fx_generation += 1;
                     }
                 }
+                ControlSpec::SetSympathetics(_)
+                | ControlSpec::SetSympatheticDecay(_)
+                | ControlSpec::SetSympatheticGain(_) => {}
             }
             cur += 1;
             continue;
@@ -654,6 +657,10 @@ pub fn record_cycle(
                         kick_l += l;
                         kick_r += r;
                     }
+                    Some(VcfTarget::Tanbura) => {
+                        dry_l += l;
+                        dry_r += r;
+                    }
                     None => {
                         dry_l += l;
                         dry_r += r;
@@ -755,6 +762,10 @@ pub fn record_cycle(
                 Some(VcfTarget::Kick) => {
                     kick_l += l;
                     kick_r += r;
+                }
+                Some(VcfTarget::Tanbura) => {
+                    dry_l += l;
+                    dry_r += r;
                 }
                 None => {
                     dry_l += l;

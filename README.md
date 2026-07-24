@@ -130,6 +130,13 @@ z <id>             queue phrase id as the next destination
 z start            queue the current top timeline item
 start              shorthand for z start
 pause              alias for toggling pause/play
+sym / sym on       excite maqam-tuned sympathetic strings from default input
+sym off            disable live-input sympathetic strings
+sym decay <n>      set resonator feedback decay (0.9..0.99999)
+sym gain <n>       set live-input excitation gain (0..512; default 64)
+sym drive <n>      alias for sym gain
+vcf tanbura ...    filter the sympathetic-string instrument bus
+vcf sym ...        alias for vcf tanbura
 q / quit           quit
 ? / help           show help
 ;                  separate multiple commands on one line

@@ -11,6 +11,7 @@ use crossbeam_channel::Receiver;
 use crate::command::VcfChange;
 use crate::fx::{FxProcessor, FxSettings};
 use crate::sequencer::{AudioCmd, ControlSpec, Phrase, SubdivEvent};
+use crate::sympathetics::SympatheticStrings;
 use crate::synth::{
     evolve_bar, spawn_phrase_start, spawn_sub_bass, spawn_voices, Milestone, Voice, VoiceKind,
 };
@@ -60,6 +61,9 @@ enum PendingControl {
     SetSustain(f64),
     SetVcf(VcfChange),
     SetFx(crate::command::FxChange),
+    SetSympathetics(bool),
+    SetSympatheticDecay(f32),
+    SetSympatheticGain(f32),
 }
 
 struct StereoFilter {
@@ -100,6 +104,7 @@ struct FilterBank {
     bass: StereoFilter,
     kanun: StereoFilter,
     kick: StereoFilter,
+    tanbura: StereoFilter,
 }
 
 impl FilterBank {
@@ -109,6 +114,7 @@ impl FilterBank {
             bass: StereoFilter::new(sr),
             kanun: StereoFilter::new(sr),
             kick: StereoFilter::new(sr),
+            tanbura: StereoFilter::new(sr),
         }
     }
 
@@ -117,6 +123,7 @@ impl FilterBank {
         self.bass.set_settings(bank.bass);
         self.kanun.set_settings(bank.kanun);
         self.kick.set_settings(bank.kick);
+        self.tanbura.set_settings(bank.tanbura);
     }
 
     fn update_bank(&mut self, bank: VcfBank) {
@@ -124,6 +131,7 @@ impl FilterBank {
         self.bass.update_settings(bank.bass);
         self.kanun.update_settings(bank.kanun);
         self.kick.update_settings(bank.kick);
+        self.tanbura.update_settings(bank.tanbura);
     }
 
     fn apply(&mut self, settings: VcfSettings) {
@@ -132,6 +140,7 @@ impl FilterBank {
             VcfTarget::Bass => self.bass.set_settings(settings),
             VcfTarget::Kanun => self.kanun.set_settings(settings),
             VcfTarget::Kick => self.kick.set_settings(settings),
+            VcfTarget::Tanbura => self.tanbura.set_settings(settings),
         }
     }
 
@@ -140,6 +149,7 @@ impl FilterBank {
         self.bass.reset();
         self.kanun.reset();
         self.kick.reset();
+        self.tanbura.reset();
     }
 }
 
@@ -159,7 +169,12 @@ fn make_bar_states(phrase: &Phrase, sr: f64, bpm: f64) -> Vec<BarState> {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
+pub struct AudioStreams {
+    _output: cpal::Stream,
+    _input: Option<cpal::Stream>,
+}
+
+pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -167,6 +182,29 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
     let cfg = device.default_output_config()?;
     let sr = cfg.sample_rate().0 as f64;
     let ch = cfg.channels() as usize;
+    let (input_tx, input_rx) = crossbeam_channel::bounded::<f32>(16_384);
+    let input_stream = host.default_input_device().and_then(|input_device| {
+        let input_config = input_device.default_input_config().ok()?;
+        if input_config.sample_format() != cpal::SampleFormat::F32 {
+            return None;
+        }
+        let input_channels = input_config.channels() as usize;
+        let stream = input_device
+            .build_input_stream(
+                &input_config.into(),
+                move |data: &[f32], _| {
+                    for frame in data.chunks(input_channels.max(1)) {
+                        let mono = frame.iter().copied().sum::<f32>() / frame.len().max(1) as f32;
+                        let _ = input_tx.try_send(mono);
+                    }
+                },
+                |_error| {},
+                None,
+            )
+            .ok()?;
+        stream.play().ok()?;
+        Some(stream)
+    });
 
     let mut phrases: Vec<PlayingPhrase> = Vec::new();
     let mut voices: Vec<Voice> = Vec::new();
@@ -182,6 +220,9 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
     let mut jump_counters: std::collections::HashMap<usize, usize> =
         std::collections::HashMap::new();
     let mut pending_next_id: Option<usize> = None;
+    let mut sympathetics_enabled = false;
+    let mut sympathetics = SympatheticStrings::new(sr as f32);
+    let mut sympathetic_phrase_id = None;
 
     let stream = device.build_output_stream(
         &cfg.into(),
@@ -255,6 +296,15 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                             crate::EXIT_PHRASE.store(pos, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
+                    AudioCmd::SetSympathetics(enabled) => {
+                        sympathetics_enabled = enabled;
+                    }
+                    AudioCmd::SetSympatheticDecay(decay) => {
+                        sympathetics.set_decay(decay);
+                    }
+                    AudioCmd::SetSympatheticGain(gain) => {
+                        sympathetics.set_input_gain(gain);
+                    }
                     AudioCmd::ReplacePhrase(p) => {
                         if let Some(pp) = phrases.iter_mut().find(|pp| pp.phrase.id == p.id) {
                             pp.phrase.src = p.src;
@@ -285,6 +335,27 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                                     phrases.iter().position(|p| p.phrase.id == pid).unwrap_or(0);
                                 crate::CUR_PHRASE
                                     .store(cur_phrase, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    AudioCmd::MovePhrase { id, down } => {
+                        let playing_id = phrases.get(cur_phrase).map(|p| p.phrase.id);
+                        if let Some(pos) = phrases.iter().position(|p| p.phrase.id == id) {
+                            let other = if down {
+                                pos.checked_add(1).filter(|&next| next < phrases.len())
+                            } else {
+                                pos.checked_sub(1)
+                            };
+                            if let Some(other) = other {
+                                phrases.swap(pos, other);
+                                if let Some(pid) = playing_id {
+                                    cur_phrase = phrases
+                                        .iter()
+                                        .position(|p| p.phrase.id == pid)
+                                        .unwrap_or(cur_phrase);
+                                    crate::CUR_PHRASE
+                                        .store(cur_phrase, std::sync::atomic::Ordering::Relaxed);
+                                }
                             }
                         }
                     }
@@ -335,7 +406,25 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                                 fx_processor.set_settings(setting);
                             }
                         }
+                        PendingControl::SetSympathetics(enabled) => {
+                            sympathetics_enabled = enabled;
+                        }
+                        PendingControl::SetSympatheticDecay(decay) => {
+                            sympathetics.set_decay(decay);
+                        }
+                        PendingControl::SetSympatheticGain(gain) => {
+                            sympathetics.set_input_gain(gain);
+                        }
                     }
+                }
+
+                let current_phrase = phrases.get(cur_phrase);
+                let current_phrase_id = current_phrase.map(|phrase| phrase.phrase.id);
+                if current_phrase_id != sympathetic_phrase_id {
+                    if let Some(phrase) = current_phrase {
+                        sympathetics.set_targets(&phrase.phrase.bar.frequencies);
+                    }
+                    sympathetic_phrase_id = current_phrase_id;
                 }
 
                 if milestone == Milestone::PhraseStart && !paused {
@@ -379,7 +468,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                 }
 
                 voices.retain(|v| !v.done);
-                if voices.is_empty() && !fx.active() {
+                if voices.is_empty() && !fx.active() && !sympathetics_enabled {
                     vcf_filters.reset();
                     for sample in frame.iter_mut() {
                         *sample = 0.0;
@@ -392,6 +481,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                 let (mut bass_left, mut bass_right) = (0f32, 0f32);
                 let (mut kanun_left, mut kanun_right) = (0f32, 0f32);
                 let (mut kick_left, mut kick_right) = (0f32, 0f32);
+                let (mut tanbura_left, mut tanbura_right) = (0f32, 0f32);
                 for v in voices.iter_mut() {
                     let setting = if vcf.all.enabled {
                         Some(vcf.all)
@@ -422,11 +512,31 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                             kick_left += left;
                             kick_right += right;
                         }
+                        Some(VcfTarget::Tanbura) => {
+                            dry_left += left;
+                            dry_right += right;
+                        }
                         None => {
                             dry_left += left;
                             dry_right += right;
                         }
                     }
+                }
+                let sympathetic = if sympathetics_enabled {
+                    sympathetics.process(input_rx.try_recv().unwrap_or(0.0))
+                } else {
+                    while input_rx.try_recv().is_ok() {}
+                    0.0
+                };
+                if vcf.all.enabled {
+                    all_left += sympathetic;
+                    all_right += sympathetic;
+                } else if vcf.tanbura.enabled {
+                    tanbura_left += sympathetic;
+                    tanbura_right += sympathetic;
+                } else {
+                    dry_left += sympathetic;
+                    dry_right += sympathetic;
                 }
                 let (mut left, mut right) = (dry_left, dry_right);
                 if vcf.all.enabled {
@@ -446,6 +556,11 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
                     }
                     if vcf.kick.enabled {
                         let filtered = vcf_filters.kick.process(kick_left, kick_right);
+                        left += filtered.0;
+                        right += filtered.1;
+                    }
+                    if vcf.tanbura.enabled {
+                        let filtered = vcf_filters.tanbura.process(tanbura_left, tanbura_right);
                         left += filtered.0;
                         right += filtered.1;
                     }
@@ -473,7 +588,10 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<cpal::Stream> {
     )?;
 
     stream.play()?;
-    Ok(stream)
+    Ok(AudioStreams {
+        _output: stream,
+        _input: input_stream,
+    })
 }
 
 fn tick_sequencer(
@@ -538,6 +656,9 @@ fn tick_sequencer(
                 ControlSpec::SetSustain(v) => PendingControl::SetSustain(v),
                 ControlSpec::SetVcf(v) => PendingControl::SetVcf(v),
                 ControlSpec::SetFx(v) => PendingControl::SetFx(v),
+                ControlSpec::SetSympathetics(v) => PendingControl::SetSympathetics(v),
+                ControlSpec::SetSympatheticDecay(v) => PendingControl::SetSympatheticDecay(v),
+                ControlSpec::SetSympatheticGain(v) => PendingControl::SetSympatheticGain(v),
             };
             *cur_phrase += 1;
             if *cur_phrase >= phrases.len() {

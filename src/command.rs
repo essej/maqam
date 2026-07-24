@@ -117,6 +117,18 @@ pub enum Cmd {
         before: isize,
         change: FxChange,
     },
+    InsertSympathetics {
+        before: isize,
+        enabled: bool,
+    },
+    InsertSympatheticDecay {
+        before: isize,
+        decay: f32,
+    },
+    InsertSympatheticGain {
+        before: isize,
+        gain: f32,
+    },
     MoveUp(isize),
     MoveDown(isize),
     Edit {
@@ -146,6 +158,18 @@ pub enum Cmd {
         id: isize,
         change: FxChange,
     },
+    EditSympathetics {
+        id: isize,
+        enabled: bool,
+    },
+    EditSympatheticDecay {
+        id: isize,
+        decay: f32,
+    },
+    EditSympatheticGain {
+        id: isize,
+        gain: f32,
+    },
     InsertJump {
         before: isize,
         to: isize,
@@ -154,6 +178,9 @@ pub enum Cmd {
     DeleteBars(Vec<isize>),
     Rotate,
     Stop,
+    Sympathetics(bool),
+    SympatheticDecay(f32),
+    SympatheticGain(f32),
     SetBpm(ValueChange),
     SetSustain(ValueChange),
     SetVcf(VcfChange),
@@ -198,6 +225,9 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         "clear" => return Ok(Cmd::Clear),
         "rot" => return Ok(Cmd::Rotate),
         "stop" => return Ok(Cmd::Stop),
+        "sym" => return Ok(Cmd::Sympathetics(true)),
+        "sym on" => return Ok(Cmd::Sympathetics(true)),
+        "sym off" => return Ok(Cmd::Sympathetics(false)),
         "start" => {
             return Ok(Cmd::TogglePause {
                 start_id: Some(START_REF),
@@ -235,6 +265,38 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         .skip_while(|c| c.is_ascii_alphabetic())
         .collect();
     let al = alpha.to_ascii_lowercase();
+
+    if al == "sym" {
+        let mut tokens = input.split_whitespace();
+        tokens.next();
+        return match tokens.next().map(str::to_ascii_lowercase).as_deref() {
+            None | Some("on") => Ok(Cmd::Sympathetics(true)),
+            Some("off") => Ok(Cmd::Sympathetics(false)),
+            Some("decay") => {
+                let decay = tokens
+                    .next()
+                    .ok_or("usage: sym decay <0.9..0.99999>")?
+                    .parse::<f32>()
+                    .map_err(|_| "usage: sym decay <0.9..0.99999>")?;
+                if !(0.9..=0.999_99).contains(&decay) {
+                    return Err("sym decay out of range 0.9..0.99999".into());
+                }
+                Ok(Cmd::SympatheticDecay(decay))
+            }
+            Some("gain" | "drive") => {
+                let gain = tokens
+                    .next()
+                    .ok_or("usage: sym gain <0..512>")?
+                    .parse::<f32>()
+                    .map_err(|_| "usage: sym gain <0..512>")?;
+                if !(0.0..=512.0).contains(&gain) {
+                    return Err("sym gain out of range 0..512".into());
+                }
+                Ok(Cmd::SympatheticGain(gain))
+            }
+            _ => Err("usage: sym [on|off] | sym decay <0.9..0.99999> | sym gain <0..512>".into()),
+        };
+    }
 
     // ── SOUND TOGGLE / TRANSPORT: z [phrase-id] ──────────────────────────
     if al == "z" {
@@ -303,6 +365,9 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             Cmd::SetSustain(change) => Ok(Cmd::EditSustain { id, change }),
             Cmd::SetVcf(change) => Ok(Cmd::EditVcf { id, change }),
             Cmd::SetFx(change) => Ok(Cmd::EditFx { id, change }),
+            Cmd::Sympathetics(enabled) => Ok(Cmd::EditSympathetics { id, enabled }),
+            Cmd::SympatheticDecay(decay) => Ok(Cmd::EditSympatheticDecay { id, decay }),
+            Cmd::SympatheticGain(gain) => Ok(Cmd::EditSympatheticGain { id, gain }),
             _ => Err("unsupported command after edit".into()),
         };
     }
@@ -361,6 +426,9 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             Cmd::SetSustain(change) => Ok(Cmd::InsertSustain { before, change }),
             Cmd::SetVcf(change) => Ok(Cmd::InsertVcf { before, change }),
             Cmd::SetFx(change) => Ok(Cmd::InsertFx { before, change }),
+            Cmd::Sympathetics(enabled) => Ok(Cmd::InsertSympathetics { before, enabled }),
+            Cmd::SympatheticDecay(decay) => Ok(Cmd::InsertSympatheticDecay { before, decay }),
+            Cmd::SympatheticGain(gain) => Ok(Cmd::InsertSympatheticGain { before, gain }),
             _ => Err("unsupported command after insert".into()),
         };
     }
@@ -610,7 +678,7 @@ fn parse_ratio(s: &str) -> Option<(u32, u32)> {
 }
 
 fn parse_vcf_change(input: &str) -> Result<VcfChange, String> {
-    let usage = "usage: vcf [all|bass|kanun|kick] <cutoff> [res] [drive] | vcf [target] off | vcf bass cut=<hz|+n|-n|+nt> res=<0..1|+n|-n|+nt> drive=<n|+n|-n|+nt> wave=<shape> | cut <hz> | res <0..1> | drive <n>";
+    let usage = "usage: vcf [all|bass|kanun|kick|tanbura] <cutoff> [res] [drive] | vcf [target] off | vcf tanbura cut=<hz|+n|-n|+nt> res=<0..1|+n|-n|+nt> drive=<n|+n|-n|+nt> | cut <hz> | res <0..1> | drive <n>";
     let mut toks = input.split_whitespace();
     let head = toks.next().unwrap_or("").to_ascii_lowercase();
     let mut out = VcfChange::default();

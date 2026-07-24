@@ -12,6 +12,7 @@ mod renderer;
 mod sequencer;
 mod session_v3;
 mod source_background;
+mod sympathetics;
 mod synth;
 mod tuning;
 mod ui;
