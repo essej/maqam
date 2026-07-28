@@ -161,9 +161,13 @@ start              shorthand for z start
 pause              alias for toggling pause/play
 sym / sym on       excite maqam-tuned sympathetic strings from default input
 sym off            disable live-input sympathetic strings
-sym decay <n>      set string retention per millisecond (0.9..0.99999; default 0.99)
-sym gain <n>       set live-input excitation gain (0..512; default 6)
+sym decay <n>      set string retention per millisecond (0.9..0.99999; default 0.999)
+sym gain <n>       set live-input excitation gain (0..512; default 2)
 sym drive <n>      alias for sym gain
+sym decay <n> drive <n> kanun <n> bass <n>
+                   combined sym settings; omitted values stay unchanged
+sym <mic|kanun|bass|drums> decay <n> drive <n> amount <n>
+                   per-source sympathetic partition settings
 vcf sym ...        filter the sympathetic-string instrument bus
 q / quit           quit
 ? / help           show help
@@ -175,7 +179,10 @@ q / quit           quit
 These commands update current state and also append a timeline entry, so they
 can be moved, edited, saved, loaded, and replayed as part of the piece.
 The `sym` on/off, gain/drive, and decay commands above are timeline entries as
-well.
+well. Combined `sym` lines follow the same named-parameter style as VCF: only
+the values present on the line change. `sym mic ...`, `sym kanun ...`,
+`sym bass ...`, and `sym drums ...` partition decay/drive/amount by source, so
+live mic can ring harder and longer than the internal kanun or bass feeds.
 
 ```text
 bpm <n|+n|-n|*k|/k>                  tempo, range 20..400
@@ -200,15 +207,16 @@ entry.
 ### VCF And VCO
 
 The VCF is off by default. It is a Moog-ish resonant low-pass filter. The
-filter can be applied to one master mix (`all`) or per instrument (`bass`,
-`kanun`, `kick`, `sym`). Enabling `all` disables the per-instrument filters.
+filter can be applied to one master mix (`all`) or per item (`mic`, `bass`,
+`kanun`, `drums`, `sym`). `kick` remains an alias for `drums`. Enabling `all`
+disables the per-item filters.
 Enabling a per-instrument filter disables `all` but leaves other per-instrument
 filters alone.
 
 ```text
 vcf off
 vcf all off
-vcf <all|bass|kanun|kick|sym> off
+vcf <all|mic|bass|kanun|drums|kick|sym> off
 vcf <target> <cutoff> [res] [drive]
 vcf <target> cut=<hz|+n|-n|*k|/k|+nt> res=<n> drive=<n> wave=<shape>
 cut <hz|+n|-n|+nt>
@@ -216,13 +224,15 @@ res <n|+n|-n|+nt>
 drive <n|+n|-n|+nt>
 ```
 
-Wave names must be named parameters:
+Wave names must be named parameters. `vcf all` ignores wave specs because it
+filters the final outgoing waveform after all item VCOs have already rendered:
 
 ```text
 wave=sin
 wave=tri
 wave=squ
 wave=saw
+wave=mic       redundant for the mic target; mic VCF input is always live mic
 ```
 
 Examples:
@@ -230,7 +240,8 @@ Examples:
 ```text
 vcf bass 900 0.65 3.5 wave=saw
 vcf kanun cut=2400 res=0.35 drive=2.0 wave=tri
-vcf kick cut=700 res=0.25 drive=2.5 wave=squ
+vcf drums cut=700 res=0.25 drive=2.5 wave=squ
+vcf mic cut=1800 res=0.20 drive=1.2
 vcf bass cut=+2t
 vcf bass cut=+0
 vcf all off

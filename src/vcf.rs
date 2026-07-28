@@ -17,6 +17,7 @@ pub struct VcfSettings {
 pub struct VcfBank {
     pub focus: VcfTarget,
     pub all: VcfSettings,
+    pub mic: VcfSettings,
     pub bass: VcfSettings,
     pub kanun: VcfSettings,
     pub kick: VcfSettings,
@@ -26,6 +27,7 @@ pub struct VcfBank {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VcfTarget {
     All,
+    Mic,
     Bass,
     Kanun,
     Kick,
@@ -36,9 +38,10 @@ impl VcfTarget {
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "all" | "mix" | "master" => Some(Self::All),
+            "mic" | "input" | "live" => Some(Self::Mic),
             "bass" | "sub" | "subbass" => Some(Self::Bass),
             "kanun" | "qanun" | "melody" => Some(Self::Kanun),
-            "kick" | "kicks" => Some(Self::Kick),
+            "drums" | "drum" | "kick" | "kicks" => Some(Self::Kick),
             "tanbura" | "tambura" | "sym" | "sympathetics" => Some(Self::Tanbura),
             _ => None,
         }
@@ -47,9 +50,10 @@ impl VcfTarget {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::All => "all",
+            Self::Mic => "mic",
             Self::Bass => "bass",
             Self::Kanun => "kanun",
-            Self::Kick => "kick",
+            Self::Kick => "drums",
             Self::Tanbura => "sym",
         }
     }
@@ -61,6 +65,7 @@ pub enum VcoWave {
     Tri,
     Squ,
     Saw,
+    Mic,
 }
 
 impl VcoWave {
@@ -70,6 +75,7 @@ impl VcoWave {
             "tri" | "triangle" => Some(Self::Tri),
             "squ" | "square" | "sq" => Some(Self::Squ),
             "saw" | "sawtooth" => Some(Self::Saw),
+            "mic" | "input" | "live" => Some(Self::Mic),
             _ => None,
         }
     }
@@ -80,6 +86,14 @@ impl VcoWave {
             Self::Tri => "tri",
             Self::Squ => "squ",
             Self::Saw => "saw",
+            Self::Mic => "mic",
+        }
+    }
+
+    pub fn oscillator(self) -> Option<Self> {
+        match self {
+            Self::Mic => None,
+            wave => Some(wave),
         }
     }
 
@@ -97,6 +111,7 @@ impl VcoWave {
                 }
             }
             Self::Saw => (2.0 * p - 1.0) as f32,
+            Self::Mic => 0.0,
         }
     }
 }
@@ -119,8 +134,14 @@ impl Default for VcfSettings {
 
 impl VcfSettings {
     pub fn for_target(target: VcfTarget) -> Self {
+        let wave = if target == VcfTarget::Mic {
+            VcoWave::Mic
+        } else {
+            Self::default().wave
+        };
         Self {
             target,
+            wave,
             ..Self::default()
         }
     }
@@ -131,6 +152,7 @@ impl Default for VcfBank {
         Self {
             focus: VcfTarget::All,
             all: VcfSettings::for_target(VcfTarget::All),
+            mic: VcfSettings::for_target(VcfTarget::Mic),
             bass: VcfSettings::for_target(VcfTarget::Bass),
             kanun: VcfSettings::for_target(VcfTarget::Kanun),
             kick: VcfSettings::for_target(VcfTarget::Kick),
@@ -143,6 +165,7 @@ impl VcfBank {
     pub fn get(self, target: VcfTarget) -> VcfSettings {
         match target {
             VcfTarget::All => self.all,
+            VcfTarget::Mic => self.mic,
             VcfTarget::Bass => self.bass,
             VcfTarget::Kanun => self.kanun,
             VcfTarget::Kick => self.kick,
@@ -156,16 +179,23 @@ impl VcfBank {
             VcfTarget::All => {
                 self.all = setting;
                 if setting.enabled {
+                    self.mic.enabled = false;
                     self.bass.enabled = false;
                     self.kanun.enabled = false;
                     self.kick.enabled = false;
                     self.tanbura.enabled = false;
                 } else {
+                    self.mic.enabled = false;
                     self.bass.enabled = false;
                     self.kanun.enabled = false;
                     self.kick.enabled = false;
                     self.tanbura.enabled = false;
                 }
+            }
+            VcfTarget::Mic => {
+                self.all.enabled = false;
+                setting.target = VcfTarget::Mic;
+                self.mic = setting;
             }
             VcfTarget::Bass => {
                 self.all.enabled = false;
@@ -193,6 +223,7 @@ impl VcfBank {
     pub fn advance_tick(&mut self) {
         for target in [
             VcfTarget::All,
+            VcfTarget::Mic,
             VcfTarget::Bass,
             VcfTarget::Kanun,
             VcfTarget::Kick,
@@ -213,6 +244,7 @@ impl VcfBank {
     fn apply_to_slot(&mut self, setting: VcfSettings) {
         match setting.target {
             VcfTarget::All => self.all = setting,
+            VcfTarget::Mic => self.mic = setting,
             VcfTarget::Bass => self.bass = setting,
             VcfTarget::Kanun => self.kanun = setting,
             VcfTarget::Kick => self.kick = setting,

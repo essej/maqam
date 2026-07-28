@@ -33,8 +33,8 @@ impl SympatheticStrings {
             noise_floor: 0.002,
             gate: 0.0,
             wet: 0.65,
-            input_gain: 6.0,
-            decay: 0.99,
+            input_gain: 2.0,
+            decay: 0.999,
             previous_input: 0.0,
         }
     }

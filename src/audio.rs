@@ -8,7 +8,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::Receiver;
 
-use crate::command::VcfChange;
+use crate::command::{SympatheticChange, SympatheticTarget, VcfChange};
 use crate::fx::{FxProcessor, FxSettings};
 use crate::sequencer::{AudioCmd, ControlSpec, Phrase, SubdivEvent};
 use crate::sympathetics::SympatheticStrings;
@@ -64,6 +64,149 @@ enum PendingControl {
     SetSympathetics(bool),
     SetSympatheticDecay(f32),
     SetSympatheticGain(f32),
+    SetSympathetic(SympatheticChange),
+}
+
+#[derive(Clone, Copy)]
+struct SympatheticPartitionSettings {
+    enabled: bool,
+    amount: f32,
+}
+
+struct SympatheticPartition {
+    strings: SympatheticStrings,
+    settings: SympatheticPartitionSettings,
+}
+
+impl SympatheticPartition {
+    fn new(sr: f32, amount: f32) -> Self {
+        Self {
+            strings: SympatheticStrings::new(sr),
+            settings: SympatheticPartitionSettings {
+                enabled: true,
+                amount,
+            },
+        }
+    }
+}
+
+struct SympatheticBank {
+    mic: SympatheticPartition,
+    kanun: SympatheticPartition,
+    bass: SympatheticPartition,
+    drums: SympatheticPartition,
+}
+
+impl SympatheticBank {
+    fn new(sr: f32) -> Self {
+        Self {
+            mic: SympatheticPartition::new(sr, 1.0),
+            kanun: SympatheticPartition::new(sr, 0.0),
+            bass: SympatheticPartition::new(sr, 0.0),
+            drums: SympatheticPartition::new(sr, 0.0),
+        }
+    }
+
+    fn set_targets(&mut self, frequencies: &[f64]) {
+        self.mic.strings.set_targets(frequencies);
+        self.kanun.strings.set_targets(frequencies);
+        self.bass.strings.set_targets(frequencies);
+        self.drums.strings.set_targets(frequencies);
+    }
+
+    fn has_energy(&self) -> bool {
+        self.mic.strings.has_energy()
+            || self.kanun.strings.has_energy()
+            || self.bass.strings.has_energy()
+            || self.drums.strings.has_energy()
+    }
+
+    fn process(
+        &mut self,
+        master_enabled: bool,
+        mic_input: f32,
+        kanun_input: f32,
+        bass_input: f32,
+        drums_input: f32,
+    ) -> f32 {
+        let mic = process_sym_partition(&mut self.mic, master_enabled, mic_input);
+        let kanun = process_sym_partition(&mut self.kanun, master_enabled, kanun_input);
+        let bass = process_sym_partition(&mut self.bass, master_enabled, bass_input);
+        let drums = process_sym_partition(&mut self.drums, master_enabled, drums_input);
+        mic + kanun + bass + drums
+    }
+
+    fn apply_change(&mut self, change: SympatheticChange, master_enabled: &mut bool) {
+        if change.target.is_none() {
+            if let Some(value) = change.enabled {
+                *master_enabled = value;
+            }
+        }
+
+        match change.target.unwrap_or(SympatheticTarget::All) {
+            SympatheticTarget::All => {
+                for target in [
+                    SympatheticTarget::Mic,
+                    SympatheticTarget::Kanun,
+                    SympatheticTarget::Bass,
+                    SympatheticTarget::Drums,
+                ] {
+                    self.apply_partition_change(target, change);
+                }
+            }
+            target => self.apply_partition_change(target, change),
+        }
+
+        if let Some(value) = change.mic {
+            self.mic.settings.amount = value;
+        }
+        if let Some(value) = change.kanun {
+            self.kanun.settings.amount = value;
+        }
+        if let Some(value) = change.bass {
+            self.bass.settings.amount = value;
+        }
+        if let Some(value) = change.drums {
+            self.drums.settings.amount = value;
+        }
+    }
+
+    fn apply_partition_change(&mut self, target: SympatheticTarget, change: SympatheticChange) {
+        let partition = match target {
+            SympatheticTarget::All => return,
+            SympatheticTarget::Mic => &mut self.mic,
+            SympatheticTarget::Kanun => &mut self.kanun,
+            SympatheticTarget::Bass => &mut self.bass,
+            SympatheticTarget::Drums => &mut self.drums,
+        };
+        if change.target.is_some() {
+            if let Some(value) = change.enabled {
+                partition.settings.enabled = value;
+            }
+        }
+        if let Some(value) = change.decay {
+            partition.strings.set_decay(value);
+        }
+        if let Some(value) = change.gain {
+            partition.strings.set_input_gain(value);
+        }
+        if let Some(value) = change.amount {
+            partition.settings.amount = value;
+        }
+    }
+}
+
+fn process_sym_partition(
+    partition: &mut SympatheticPartition,
+    master_enabled: bool,
+    input: f32,
+) -> f32 {
+    let driven = if master_enabled && partition.settings.enabled {
+        input * partition.settings.amount
+    } else {
+        0.0
+    };
+    partition.strings.process(driven)
 }
 
 struct StereoFilter {
@@ -101,6 +244,7 @@ impl StereoFilter {
 
 struct FilterBank {
     all: StereoFilter,
+    mic: StereoFilter,
     bass: StereoFilter,
     kanun: StereoFilter,
     kick: StereoFilter,
@@ -111,6 +255,7 @@ impl FilterBank {
     fn new(sr: f32) -> Self {
         Self {
             all: StereoFilter::new(sr),
+            mic: StereoFilter::new(sr),
             bass: StereoFilter::new(sr),
             kanun: StereoFilter::new(sr),
             kick: StereoFilter::new(sr),
@@ -120,6 +265,7 @@ impl FilterBank {
 
     fn set_bank(&mut self, bank: VcfBank) {
         self.all.set_settings(bank.all);
+        self.mic.set_settings(bank.mic);
         self.bass.set_settings(bank.bass);
         self.kanun.set_settings(bank.kanun);
         self.kick.set_settings(bank.kick);
@@ -128,6 +274,7 @@ impl FilterBank {
 
     fn update_bank(&mut self, bank: VcfBank) {
         self.all.update_settings(bank.all);
+        self.mic.update_settings(bank.mic);
         self.bass.update_settings(bank.bass);
         self.kanun.update_settings(bank.kanun);
         self.kick.update_settings(bank.kick);
@@ -137,6 +284,7 @@ impl FilterBank {
     fn apply(&mut self, settings: VcfSettings) {
         match settings.target {
             VcfTarget::All => self.all.set_settings(settings),
+            VcfTarget::Mic => self.mic.set_settings(settings),
             VcfTarget::Bass => self.bass.set_settings(settings),
             VcfTarget::Kanun => self.kanun.set_settings(settings),
             VcfTarget::Kick => self.kick.set_settings(settings),
@@ -146,6 +294,7 @@ impl FilterBank {
 
     fn reset(&mut self) {
         self.all.reset();
+        self.mic.reset();
         self.bass.reset();
         self.kanun.reset();
         self.kick.reset();
@@ -221,7 +370,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
         std::collections::HashMap::new();
     let mut pending_next_id: Option<usize> = None;
     let mut sympathetics_enabled = false;
-    let mut sympathetics = SympatheticStrings::new(sr as f32);
+    let mut sympathetics = SympatheticBank::new(sr as f32);
     let mut sympathetic_phrase_id = None;
 
     let stream = device.build_output_stream(
@@ -300,10 +449,25 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         sympathetics_enabled = enabled;
                     }
                     AudioCmd::SetSympatheticDecay(decay) => {
-                        sympathetics.set_decay(decay);
+                        sympathetics.apply_change(
+                            SympatheticChange {
+                                decay: Some(decay),
+                                ..SympatheticChange::default()
+                            },
+                            &mut sympathetics_enabled,
+                        );
                     }
                     AudioCmd::SetSympatheticGain(gain) => {
-                        sympathetics.set_input_gain(gain);
+                        sympathetics.apply_change(
+                            SympatheticChange {
+                                gain: Some(gain),
+                                ..SympatheticChange::default()
+                            },
+                            &mut sympathetics_enabled,
+                        );
+                    }
+                    AudioCmd::SetSympathetic(change) => {
+                        sympathetics.apply_change(change, &mut sympathetics_enabled);
                     }
                     AudioCmd::ReplacePhrase(p) => {
                         if let Some(pp) = phrases.iter_mut().find(|pp| pp.phrase.id == p.id) {
@@ -410,10 +574,25 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                             sympathetics_enabled = enabled;
                         }
                         PendingControl::SetSympatheticDecay(decay) => {
-                            sympathetics.set_decay(decay);
+                            sympathetics.apply_change(
+                                SympatheticChange {
+                                    decay: Some(decay),
+                                    ..SympatheticChange::default()
+                                },
+                                &mut sympathetics_enabled,
+                            );
                         }
                         PendingControl::SetSympatheticGain(gain) => {
-                            sympathetics.set_input_gain(gain);
+                            sympathetics.apply_change(
+                                SympatheticChange {
+                                    gain: Some(gain),
+                                    ..SympatheticChange::default()
+                                },
+                                &mut sympathetics_enabled,
+                            );
+                        }
+                        PendingControl::SetSympathetic(change) => {
+                            sympathetics.apply_change(change, &mut sympathetics_enabled);
                         }
                     }
                 }
@@ -468,10 +647,13 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 }
 
                 voices.retain(|v| !v.done);
+                let live_input = input_rx.try_recv().unwrap_or(0.0);
                 if voices.is_empty()
                     && !fx.active()
                     && !sympathetics_enabled
                     && !sympathetics.has_energy()
+                    && !vcf.all.enabled
+                    && !vcf.mic.enabled
                 {
                     vcf_filters.reset();
                     for sample in frame.iter_mut() {
@@ -482,10 +664,14 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
 
                 let (mut dry_left, mut dry_right) = (0f32, 0f32);
                 let (mut all_left, mut all_right) = (0f32, 0f32);
+                let (mut mic_left, mut mic_right) = (0f32, 0f32);
                 let (mut bass_left, mut bass_right) = (0f32, 0f32);
                 let (mut kanun_left, mut kanun_right) = (0f32, 0f32);
                 let (mut kick_left, mut kick_right) = (0f32, 0f32);
                 let (mut tanbura_left, mut tanbura_right) = (0f32, 0f32);
+                let mut sym_bass_input = 0.0f32;
+                let mut sym_kanun_input = 0.0f32;
+                let mut sym_drums_input = 0.0f32;
                 for v in voices.iter_mut() {
                     let setting = if vcf.all.enabled {
                         Some(vcf.all)
@@ -495,14 +681,34 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                             setting.enabled.then_some(setting)
                         })
                     };
-                    let s = v.sample_with_wave(sr, setting.map(|setting| setting.wave));
+                    let s = v.sample_with_wave(
+                        sr,
+                        setting.and_then(|setting| {
+                            (setting.target != VcfTarget::All)
+                                .then_some(setting.wave)
+                                .and_then(|wave| wave.oscillator())
+                        }),
+                    );
                     let angle = (v.pan + 1.0) * std::f32::consts::FRAC_PI_4;
                     let left = s * angle.cos();
                     let right = s * angle.sin();
+                    let mono = (left + right) * 0.5;
+                    match v.kind {
+                        VoiceKind::SubBass => sym_bass_input += mono,
+                        VoiceKind::MelodyFm => sym_kanun_input += mono,
+                        VoiceKind::FloorTom | VoiceKind::Snare | VoiceKind::Crash => {
+                            sym_drums_input += mono
+                        }
+                        VoiceKind::PhraseChange => {}
+                    }
                     match setting.map(|setting| setting.target) {
                         Some(VcfTarget::All) => {
                             all_left += left;
                             all_right += right;
+                        }
+                        Some(VcfTarget::Mic) => {
+                            dry_left += left;
+                            dry_right += right;
                         }
                         Some(VcfTarget::Bass) => {
                             bass_left += left;
@@ -527,14 +733,25 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     }
                 }
                 let sympathetic = if sympathetics_enabled {
-                    let live_input = input_rx.try_recv().unwrap_or(0.0);
-                    sympathetics.process(live_input)
+                    sympathetics.process(
+                        true,
+                        live_input,
+                        sym_kanun_input,
+                        sym_bass_input,
+                        sym_drums_input,
+                    )
                 } else {
-                    while input_rx.try_recv().is_ok() {}
                     // Disabling sym closes the bridge to new energy; already
                     // ringing strings still decay into the output.
-                    sympathetics.process(0.0)
+                    sympathetics.process(false, 0.0, 0.0, 0.0, 0.0)
                 };
+                if vcf.all.enabled {
+                    all_left += live_input;
+                    all_right += live_input;
+                } else if vcf.mic.enabled {
+                    mic_left += live_input;
+                    mic_right += live_input;
+                }
                 if vcf.all.enabled {
                     all_left += sympathetic;
                     all_right += sympathetic;
@@ -551,6 +768,11 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     left += filtered.0;
                     right += filtered.1;
                 } else {
+                    if vcf.mic.enabled {
+                        let filtered = vcf_filters.mic.process(mic_left, mic_right);
+                        left += filtered.0;
+                        right += filtered.1;
+                    }
                     if vcf.bass.enabled {
                         let filtered = vcf_filters.bass.process(bass_left, bass_right);
                         left += filtered.0;
@@ -666,6 +888,7 @@ fn tick_sequencer(
                 ControlSpec::SetSympathetics(v) => PendingControl::SetSympathetics(v),
                 ControlSpec::SetSympatheticDecay(v) => PendingControl::SetSympatheticDecay(v),
                 ControlSpec::SetSympatheticGain(v) => PendingControl::SetSympatheticGain(v),
+                ControlSpec::SetSympathetic(v) => PendingControl::SetSympathetic(v),
             };
             *cur_phrase += 1;
             if *cur_phrase >= phrases.len() {

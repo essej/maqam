@@ -34,6 +34,51 @@ pub struct FxChange {
     pub delay_mix: Option<ValueChange>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SympatheticChange {
+    pub target: Option<SympatheticTarget>,
+    pub enabled: Option<bool>,
+    pub decay: Option<f32>,
+    pub gain: Option<f32>,
+    pub amount: Option<f32>,
+    pub mic: Option<f32>,
+    pub kanun: Option<f32>,
+    pub bass: Option<f32>,
+    pub drums: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SympatheticTarget {
+    All,
+    Mic,
+    Kanun,
+    Bass,
+    Drums,
+}
+
+impl SympatheticTarget {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "all" | "mix" | "master" => Some(Self::All),
+            "mic" | "input" | "live" => Some(Self::Mic),
+            "kanun" | "qanun" | "melody" => Some(Self::Kanun),
+            "bass" | "sub" | "subbass" => Some(Self::Bass),
+            "drums" | "drum" | "kick" | "kicks" => Some(Self::Drums),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Mic => "mic",
+            Self::Kanun => "kanun",
+            Self::Bass => "bass",
+            Self::Drums => "drums",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum ValueChange {
     Set(f64),
@@ -129,6 +174,10 @@ pub enum Cmd {
         before: isize,
         gain: f32,
     },
+    InsertSympathetic {
+        before: isize,
+        change: SympatheticChange,
+    },
     MoveUp(isize),
     MoveDown(isize),
     Edit {
@@ -170,6 +219,10 @@ pub enum Cmd {
         id: isize,
         gain: f32,
     },
+    EditSympathetic {
+        id: isize,
+        change: SympatheticChange,
+    },
     InsertJump {
         before: isize,
         to: isize,
@@ -181,6 +234,7 @@ pub enum Cmd {
     Sympathetics(bool),
     SympatheticDecay(f32),
     SympatheticGain(f32),
+    Sympathetic(SympatheticChange),
     SetBpm(ValueChange),
     SetSustain(ValueChange),
     SetVcf(VcfChange),
@@ -267,34 +321,59 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
     let al = alpha.to_ascii_lowercase();
 
     if al == "sym" {
-        let mut tokens = input.split_whitespace();
-        tokens.next();
-        return match tokens.next().map(str::to_ascii_lowercase).as_deref() {
-            None | Some("on") => Ok(Cmd::Sympathetics(true)),
-            Some("off") => Ok(Cmd::Sympathetics(false)),
-            Some("decay") => {
-                let decay = tokens
-                    .next()
-                    .ok_or("usage: sym decay <0.9..0.99999>")?
-                    .parse::<f32>()
-                    .map_err(|_| "usage: sym decay <0.9..0.99999>")?;
-                if !(0.9..=0.999_99).contains(&decay) {
-                    return Err("sym decay out of range 0.9..0.99999".into());
-                }
+        let change = parse_sympathetic_change(input)?;
+        return if change.enabled == Some(true)
+            && change.target.is_none()
+            && change.decay.is_none()
+            && change.gain.is_none()
+            && change.amount.is_none()
+            && change.mic.is_none()
+            && change.kanun.is_none()
+            && change.bass.is_none()
+            && change.drums.is_none()
+        {
+            Ok(Cmd::Sympathetics(true))
+        } else if change.enabled == Some(false)
+            && change.target.is_none()
+            && change.decay.is_none()
+            && change.gain.is_none()
+            && change.amount.is_none()
+            && change.mic.is_none()
+            && change.kanun.is_none()
+            && change.bass.is_none()
+            && change.drums.is_none()
+        {
+            Ok(Cmd::Sympathetics(false))
+        } else if let Some(decay) = change.decay {
+            if change.target.is_none()
+                && change.enabled.is_none()
+                && change.gain.is_none()
+                && change.amount.is_none()
+                && change.mic.is_none()
+                && change.kanun.is_none()
+                && change.bass.is_none()
+                && change.drums.is_none()
+            {
                 Ok(Cmd::SympatheticDecay(decay))
+            } else {
+                Ok(Cmd::Sympathetic(change))
             }
-            Some("gain" | "drive") => {
-                let gain = tokens
-                    .next()
-                    .ok_or("usage: sym gain <0..512>")?
-                    .parse::<f32>()
-                    .map_err(|_| "usage: sym gain <0..512>")?;
-                if !(0.0..=512.0).contains(&gain) {
-                    return Err("sym gain out of range 0..512".into());
-                }
+        } else if let Some(gain) = change.gain {
+            if change.target.is_none()
+                && change.enabled.is_none()
+                && change.decay.is_none()
+                && change.amount.is_none()
+                && change.mic.is_none()
+                && change.kanun.is_none()
+                && change.bass.is_none()
+                && change.drums.is_none()
+            {
                 Ok(Cmd::SympatheticGain(gain))
+            } else {
+                Ok(Cmd::Sympathetic(change))
             }
-            _ => Err("usage: sym [on|off] | sym decay <0.9..0.99999> | sym gain <0..512>".into()),
+        } else {
+            Ok(Cmd::Sympathetic(change))
         };
     }
 
@@ -368,6 +447,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             Cmd::Sympathetics(enabled) => Ok(Cmd::EditSympathetics { id, enabled }),
             Cmd::SympatheticDecay(decay) => Ok(Cmd::EditSympatheticDecay { id, decay }),
             Cmd::SympatheticGain(gain) => Ok(Cmd::EditSympatheticGain { id, gain }),
+            Cmd::Sympathetic(change) => Ok(Cmd::EditSympathetic { id, change }),
             _ => Err("unsupported command after edit".into()),
         };
     }
@@ -429,6 +509,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             Cmd::Sympathetics(enabled) => Ok(Cmd::InsertSympathetics { before, enabled }),
             Cmd::SympatheticDecay(decay) => Ok(Cmd::InsertSympatheticDecay { before, decay }),
             Cmd::SympatheticGain(gain) => Ok(Cmd::InsertSympatheticGain { before, gain }),
+            Cmd::Sympathetic(change) => Ok(Cmd::InsertSympathetic { before, change }),
             _ => Err("unsupported command after insert".into()),
         };
     }
@@ -677,8 +758,106 @@ fn parse_ratio(s: &str) -> Option<(u32, u32)> {
     Some((p, q))
 }
 
+fn parse_sympathetic_change(input: &str) -> Result<SympatheticChange, String> {
+    let usage = "usage: sym [all|mic|kanun|bass|drums] [on|off] [decay <0.9..0.99999>] [drive <0..512>] [amount <0..512>] [mic <0..512>] [kanun <0..512>] [bass <0..512>] [drums <0..512>]";
+    let mut tokens = input.split_whitespace();
+    tokens.next();
+    let mut rest: Vec<&str> = tokens.collect();
+    if rest.is_empty() {
+        return Ok(SympatheticChange {
+            enabled: Some(true),
+            ..SympatheticChange::default()
+        });
+    }
+
+    let mut change = SympatheticChange::default();
+    if rest.len() >= 2 && is_sym_setting_token(rest[1]) {
+        if let Some(target) = SympatheticTarget::parse(rest[0]) {
+            change.target = Some(target);
+            rest.remove(0);
+        }
+    }
+    let mut i = 0usize;
+    while i < rest.len() {
+        let key = rest[i].to_ascii_lowercase();
+        match key.as_str() {
+            "on" => {
+                change.enabled = Some(true);
+                i += 1;
+            }
+            "off" => {
+                change.enabled = Some(false);
+                i += 1;
+            }
+            "decay" => {
+                i += 1;
+                let decay = rest
+                    .get(i)
+                    .ok_or(usage)?
+                    .parse::<f32>()
+                    .map_err(|_| usage.to_string())?;
+                if !(0.9..=0.999_99).contains(&decay) {
+                    return Err("sym decay out of range 0.9..0.99999".into());
+                }
+                change.decay = Some(decay);
+                i += 1;
+            }
+            "gain" | "drive" => {
+                i += 1;
+                change.gain = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
+                i += 1;
+            }
+            "amount" | "amt" | "level" | "send" => {
+                i += 1;
+                change.amount = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
+                i += 1;
+            }
+            "mic" | "input" | "live" => {
+                i += 1;
+                change.mic = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
+                i += 1;
+            }
+            "kanun" | "qanun" | "melody" => {
+                i += 1;
+                change.kanun = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
+                i += 1;
+            }
+            "bass" | "sub" | "subbass" => {
+                i += 1;
+                change.bass = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
+                i += 1;
+            }
+            "drums" | "drum" | "kick" | "kicks" => {
+                i += 1;
+                change.drums = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
+                i += 1;
+            }
+            _ => return Err(usage.into()),
+        }
+    }
+    Ok(change)
+}
+
+fn is_sym_setting_token(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "on" | "off" | "decay" | "gain" | "drive" | "amount" | "amt" | "level" | "send"
+    )
+}
+
+fn parse_sym_gain(value: Option<&str>, usage: &str) -> Result<f32, String> {
+    let gain = value
+        .ok_or(usage)?
+        .parse::<f32>()
+        .map_err(|_| usage.to_string())?;
+    if !(0.0..=512.0).contains(&gain) {
+        return Err("sym gain out of range 0..512".into());
+    }
+    Ok(gain)
+}
+
 fn parse_vcf_change(input: &str) -> Result<VcfChange, String> {
-    let usage = "usage: vcf [all|bass|kanun|kick|sym] <cutoff> [res] [drive] | vcf [target] off | vcf sym cut=<hz|+n|-n|+nt> res=<0..1|+n|-n|+nt> drive=<n|+n|-n|+nt> | cut <hz> | res <0..1> | drive <n>";
+    let usage = "usage: vcf [all|mic|bass|kanun|drums|kick|sym] <cutoff> [res] [drive] | vcf [target] off | vcf <target> cut=<hz|+n|-n|+nt> res=<0..1|+n|-n|+nt> drive=<n|+n|-n|+nt> wave=<sin|tri|squ|saw|mic> | cut <hz> | res <0..1> | drive <n>";
     let mut toks = input.split_whitespace();
     let head = toks.next().unwrap_or("").to_ascii_lowercase();
     let mut out = VcfChange::default();
@@ -807,7 +986,15 @@ fn parse_vcf_change(input: &str) -> Result<VcfChange, String> {
         } else {
             let name = tok.to_ascii_lowercase();
             i += 1;
-            let value = rest.get(i).ok_or(usage)?;
+            let Some(value) = rest.get(i) else {
+                if matches!(name.as_str(), "drive" | "drv") {
+                    break;
+                }
+                return Err(usage.into());
+            };
+            if matches!(name.as_str(), "drive" | "drv") && is_vcf_named_token(value) {
+                continue;
+            }
             (name, *value)
         };
         match name.as_str() {
@@ -827,6 +1014,26 @@ fn parse_vcf_change(input: &str) -> Result<VcfChange, String> {
     }
 
     Ok(out)
+}
+
+fn is_vcf_named_token(token: &str) -> bool {
+    token.contains('=')
+        || matches!(
+            token.to_ascii_lowercase().as_str(),
+            "cut"
+                | "cutoff"
+                | "freq"
+                | "frequency"
+                | "res"
+                | "q"
+                | "reso"
+                | "resonance"
+                | "drive"
+                | "drv"
+                | "wave"
+                | "wav"
+                | "shape"
+        )
 }
 
 pub fn apply_vcf_change(current: VcfBank, change: VcfChange) -> Result<VcfSettings, String> {
@@ -892,7 +1099,13 @@ pub fn apply_vcf_change(current: VcfBank, change: VcfChange) -> Result<VcfSettin
         cutoff_step_per_tick,
         resonance_step_per_tick,
         drive_step_per_tick,
-        wave: change.wave.unwrap_or(current.wave),
+        wave: if target == VcfTarget::All {
+            current.wave
+        } else if target == VcfTarget::Mic {
+            VcoWave::Mic
+        } else {
+            change.wave.unwrap_or(current.wave)
+        },
     })
 }
 

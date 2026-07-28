@@ -114,40 +114,50 @@ impl StereoFilter {
 
 struct FilterBank {
     all: StereoFilter,
+    mic: StereoFilter,
     bass: StereoFilter,
     kanun: StereoFilter,
     kick: StereoFilter,
+    tanbura: StereoFilter,
 }
 
 impl FilterBank {
     fn new(sr: f32) -> Self {
         Self {
             all: StereoFilter::new(sr),
+            mic: StereoFilter::new(sr),
             bass: StereoFilter::new(sr),
             kanun: StereoFilter::new(sr),
             kick: StereoFilter::new(sr),
+            tanbura: StereoFilter::new(sr),
         }
     }
 
     fn set_bank(&mut self, bank: VcfBank) {
         self.all.set_settings(bank.all);
+        self.mic.set_settings(bank.mic);
         self.bass.set_settings(bank.bass);
         self.kanun.set_settings(bank.kanun);
         self.kick.set_settings(bank.kick);
+        self.tanbura.set_settings(bank.tanbura);
     }
 
     fn update_bank(&mut self, bank: VcfBank) {
         self.all.update_settings(bank.all);
+        self.mic.update_settings(bank.mic);
         self.bass.update_settings(bank.bass);
         self.kanun.update_settings(bank.kanun);
         self.kick.update_settings(bank.kick);
+        self.tanbura.update_settings(bank.tanbura);
     }
 
     fn reset(&mut self) {
         self.all.reset();
+        self.mic.reset();
         self.bass.reset();
         self.kanun.reset();
         self.kick.reset();
+        self.tanbura.reset();
     }
 }
 
@@ -420,7 +430,8 @@ fn expand_one_cycle(
                 }
                 ControlSpec::SetSympathetics(_)
                 | ControlSpec::SetSympatheticDecay(_)
-                | ControlSpec::SetSympatheticGain(_) => {}
+                | ControlSpec::SetSympatheticGain(_)
+                | ControlSpec::SetSympathetic(_) => {}
             }
             cur += 1;
             continue;
@@ -624,9 +635,11 @@ pub fn record_cycle(
             }
             let (mut dry_l, mut dry_r) = (0f32, 0f32);
             let (mut all_l, mut all_r) = (0f32, 0f32);
+            let (mut mic_l, mut mic_r) = (0f32, 0f32);
             let (mut bass_l, mut bass_r) = (0f32, 0f32);
             let (mut kanun_l, mut kanun_r) = (0f32, 0f32);
             let (mut kick_l, mut kick_r) = (0f32, 0f32);
+            let (mut tanbura_l, mut tanbura_r) = (0f32, 0f32);
             for v in voices.iter_mut() {
                 let setting = if render_vcf.all.enabled {
                     Some(render_vcf.all)
@@ -636,7 +649,14 @@ pub fn record_cycle(
                         setting.enabled.then_some(setting)
                     })
                 };
-                let s = v.sample_with_wave(SR, setting.map(|setting| setting.wave));
+                let s = v.sample_with_wave(
+                    SR,
+                    setting.and_then(|setting| {
+                        (setting.target != VcfTarget::All)
+                            .then_some(setting.wave)
+                            .and_then(|wave| wave.oscillator())
+                    }),
+                );
                 let angle = (v.pan + 1.0) * std::f32::consts::FRAC_PI_4;
                 let l = s * angle.cos();
                 let r = s * angle.sin();
@@ -644,6 +664,10 @@ pub fn record_cycle(
                     Some(VcfTarget::All) => {
                         all_l += l;
                         all_r += r;
+                    }
+                    Some(VcfTarget::Mic) => {
+                        mic_l += l;
+                        mic_r += r;
                     }
                     Some(VcfTarget::Bass) => {
                         bass_l += l;
@@ -658,8 +682,8 @@ pub fn record_cycle(
                         kick_r += r;
                     }
                     Some(VcfTarget::Tanbura) => {
-                        dry_l += l;
-                        dry_r += r;
+                        tanbura_l += l;
+                        tanbura_r += r;
                     }
                     None => {
                         dry_l += l;
@@ -673,6 +697,11 @@ pub fn record_cycle(
                 l += filtered.0;
                 r += filtered.1;
             } else {
+                if render_vcf.mic.enabled {
+                    let filtered = filters.mic.process(mic_l, mic_r);
+                    l += filtered.0;
+                    r += filtered.1;
+                }
                 if render_vcf.bass.enabled {
                     let filtered = filters.bass.process(bass_l, bass_r);
                     l += filtered.0;
@@ -685,6 +714,11 @@ pub fn record_cycle(
                 }
                 if render_vcf.kick.enabled {
                     let filtered = filters.kick.process(kick_l, kick_r);
+                    l += filtered.0;
+                    r += filtered.1;
+                }
+                if render_vcf.tanbura.enabled {
+                    let filtered = filters.tanbura.process(tanbura_l, tanbura_r);
                     l += filtered.0;
                     r += filtered.1;
                 }
@@ -730,9 +764,11 @@ pub fn record_cycle(
         }
         let (mut dry_l, mut dry_r) = (0f32, 0f32);
         let (mut all_l, mut all_r) = (0f32, 0f32);
+        let (mut mic_l, mut mic_r) = (0f32, 0f32);
         let (mut bass_l, mut bass_r) = (0f32, 0f32);
         let (mut kanun_l, mut kanun_r) = (0f32, 0f32);
         let (mut kick_l, mut kick_r) = (0f32, 0f32);
+        let (mut tanbura_l, mut tanbura_r) = (0f32, 0f32);
         for v in voices.iter_mut() {
             let setting = if tail_vcf.all.enabled {
                 Some(tail_vcf.all)
@@ -742,7 +778,14 @@ pub fn record_cycle(
                     setting.enabled.then_some(setting)
                 })
             };
-            let s = v.sample_with_wave(SR, setting.map(|setting| setting.wave));
+            let s = v.sample_with_wave(
+                SR,
+                setting.and_then(|setting| {
+                    (setting.target != VcfTarget::All)
+                        .then_some(setting.wave)
+                        .and_then(|wave| wave.oscillator())
+                }),
+            );
             let angle = (v.pan + 1.0) * std::f32::consts::FRAC_PI_4;
             let l = s * angle.cos();
             let r = s * angle.sin();
@@ -750,6 +793,10 @@ pub fn record_cycle(
                 Some(VcfTarget::All) => {
                     all_l += l;
                     all_r += r;
+                }
+                Some(VcfTarget::Mic) => {
+                    mic_l += l;
+                    mic_r += r;
                 }
                 Some(VcfTarget::Bass) => {
                     bass_l += l;
@@ -764,8 +811,8 @@ pub fn record_cycle(
                     kick_r += r;
                 }
                 Some(VcfTarget::Tanbura) => {
-                    dry_l += l;
-                    dry_r += r;
+                    tanbura_l += l;
+                    tanbura_r += r;
                 }
                 None => {
                     dry_l += l;
@@ -779,6 +826,11 @@ pub fn record_cycle(
             l += filtered.0;
             r += filtered.1;
         } else {
+            if tail_vcf.mic.enabled {
+                let filtered = filters.mic.process(mic_l, mic_r);
+                l += filtered.0;
+                r += filtered.1;
+            }
             if tail_vcf.bass.enabled {
                 let filtered = filters.bass.process(bass_l, bass_r);
                 l += filtered.0;
@@ -791,6 +843,11 @@ pub fn record_cycle(
             }
             if tail_vcf.kick.enabled {
                 let filtered = filters.kick.process(kick_l, kick_r);
+                l += filtered.0;
+                r += filtered.1;
+            }
+            if tail_vcf.tanbura.enabled {
+                let filtered = filters.tanbura.process(tanbura_l, tanbura_r);
                 l += filtered.0;
                 r += filtered.1;
             }

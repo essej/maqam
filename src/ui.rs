@@ -510,7 +510,13 @@ fn draw_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             format_vcf_status(app.vcf.all)
         } else {
             let mut parts = Vec::new();
-            for setting in [app.vcf.bass, app.vcf.kanun, app.vcf.kick] {
+            for setting in [
+                app.vcf.mic,
+                app.vcf.bass,
+                app.vcf.kanun,
+                app.vcf.kick,
+                app.vcf.tanbura,
+            ] {
                 if setting.enabled {
                     parts.push(format_vcf_status(setting));
                 }

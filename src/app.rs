@@ -357,7 +357,8 @@ impl App {
                     }
                     ControlSpec::SetSympathetics(_)
                     | ControlSpec::SetSympatheticDecay(_)
-                    | ControlSpec::SetSympatheticGain(_) => {}
+                    | ControlSpec::SetSympatheticGain(_)
+                    | ControlSpec::SetSympathetic(_) => {}
                 }
                 continue;
             }
@@ -692,6 +693,14 @@ impl App {
                 );
             }
 
+            Cmd::InsertSympathetic { before, change } => {
+                self.insert_sym_control(
+                    before,
+                    sym_change_src(change),
+                    ControlSpec::SetSympathetic(change),
+                );
+            }
+
             Cmd::TogglePause { start_id } => {
                 if let Some(id) = start_id {
                     let Some(id) = self.resolve_id_ref(id) else {
@@ -901,6 +910,17 @@ impl App {
                 let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry));
                 let _ = self.audio_tx.send(AudioCmd::SetSympatheticGain(gain));
                 self.message = Some(format!("sym gain {gain:.2}"));
+            }
+            Cmd::Sympathetic(change) => {
+                let id = self.next_phrase_id;
+                self.next_phrase_id += 1;
+                let src = sym_change_src(change);
+                let entry =
+                    build_control_entry(id, src.clone(), ControlSpec::SetSympathetic(change));
+                self.phrases.push(entry.clone());
+                let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry));
+                let _ = self.audio_tx.send(AudioCmd::SetSympathetic(change));
+                self.message = Some(src);
             }
             Cmd::SetBpm(change) => {
                 let bpm = match apply_bpm_change(self.bpm, change) {
@@ -1196,6 +1216,14 @@ impl App {
                 );
             }
 
+            Cmd::EditSympathetic { id, change } => {
+                self.replace_sym_control(
+                    id,
+                    sym_change_src(change),
+                    ControlSpec::SetSympathetic(change),
+                );
+            }
+
             Cmd::DeleteBars(ids) => {
                 let mut not_found = Vec::new();
                 for id_ref in &ids {
@@ -1395,6 +1423,13 @@ impl App {
                             ControlSpec::SetSympatheticGain(gain),
                         ));
                     }
+                    Cmd::Sympathetic(change) => {
+                        loaded.push(build_control_entry(
+                            id,
+                            sym_change_src(change),
+                            ControlSpec::SetSympathetic(change),
+                        ));
+                    }
                     _ => return Err(format!("line {line_no}: expected control line")),
                 }
                 continue;
@@ -1489,6 +1524,9 @@ impl App {
                             format!("sym gain {gain}"),
                             ControlSpec::SetSympatheticGain(gain),
                         ),
+                        Cmd::Sympathetic(change) => {
+                            (sym_change_src(change), ControlSpec::SetSympathetic(change))
+                        }
                         _ => return Err(format!("line {line_no}: expected sym line")),
                     };
                     loaded.push(build_control_entry(id, src, control));
@@ -2142,9 +2180,51 @@ fn vcf_change_src(change: command::VcfChange) -> String {
         parts.push("drive".to_string());
         parts.push(value_change_src(drive));
     }
-    if let Some(wave) = change.wave {
+    if let Some(wave) = change
+        .wave
+        .filter(|_| !matches!(change.target, Some(VcfTarget::All | VcfTarget::Mic)))
+    {
         parts.push("wave".to_string());
         parts.push(wave.as_str().to_string());
+    }
+    parts.join(" ")
+}
+
+fn sym_change_src(change: command::SympatheticChange) -> String {
+    let mut parts = vec!["sym".to_string()];
+    if let Some(target) = change.target {
+        parts.push(target.as_str().to_string());
+    }
+    if let Some(enabled) = change.enabled {
+        parts.push(if enabled { "on" } else { "off" }.to_string());
+    }
+    if let Some(decay) = change.decay {
+        parts.push("decay".to_string());
+        parts.push(format!("{decay}"));
+    }
+    if let Some(gain) = change.gain {
+        parts.push("drive".to_string());
+        parts.push(format!("{gain}"));
+    }
+    if let Some(amount) = change.amount {
+        parts.push("amount".to_string());
+        parts.push(format!("{amount}"));
+    }
+    if let Some(mic) = change.mic {
+        parts.push("mic".to_string());
+        parts.push(format!("{mic}"));
+    }
+    if let Some(kanun) = change.kanun {
+        parts.push("kanun".to_string());
+        parts.push(format!("{kanun}"));
+    }
+    if let Some(bass) = change.bass {
+        parts.push("bass".to_string());
+        parts.push(format!("{bass}"));
+    }
+    if let Some(drums) = change.drums {
+        parts.push("drums".to_string());
+        parts.push(format!("{drums}"));
     }
     parts.join(" ")
 }
@@ -2329,6 +2409,39 @@ mod tests {
             app.phrases[4].control,
             Some(ControlSpec::SetSympatheticGain(96.0))
         ));
+
+        app.handle_command("edit 5 sym decay 0.999 drive 2 kanun 0.5 bass 0.5");
+        assert_eq!(
+            app.phrases[4].src,
+            "sym decay 0.999 drive 2 kanun 0.5 bass 0.5"
+        );
+        let Some(ControlSpec::SetSympathetic(change)) = app.phrases[4].control else {
+            panic!("expected combined sym control");
+        };
+        assert_eq!(change.target, None);
+        assert_eq!(change.enabled, None);
+        assert_eq!(change.decay, Some(0.999));
+        assert_eq!(change.gain, Some(2.0));
+        assert_eq!(change.amount, None);
+        assert_eq!(change.mic, None);
+        assert_eq!(change.kanun, Some(0.5));
+        assert_eq!(change.bass, Some(0.5));
+        assert_eq!(change.drums, None);
+
+        app.handle_command("edit 5 sym mic decay 0.9999 drive 8 amount 1.5");
+        assert_eq!(
+            app.phrases[4].src,
+            "sym mic decay 0.9999 drive 8 amount 1.5"
+        );
+        let Some(ControlSpec::SetSympathetic(change)) = app.phrases[4].control else {
+            panic!("expected targeted sym control");
+        };
+        assert_eq!(change.target, Some(command::SympatheticTarget::Mic));
+        assert_eq!(change.enabled, None);
+        assert_eq!(change.decay, Some(0.9999));
+        assert_eq!(change.gain, Some(8.0));
+        assert_eq!(change.amount, Some(1.5));
+        assert_eq!(change.kanun, None);
     }
 
     #[test]
@@ -2451,16 +2564,20 @@ mod tests {
 
         app.handle_command("vcf off");
         assert!(!app.vcf.all.enabled);
+        assert!(!app.vcf.mic.enabled);
         assert!(!app.vcf.bass.enabled);
         assert!(!app.vcf.kanun.enabled);
         assert!(!app.vcf.kick.enabled);
+        assert!(!app.vcf.tanbura.enabled);
         assert_eq!(app.vcf.focus, VcfTarget::All);
 
         app.handle_command("vcf bass off");
         assert!(!app.vcf.all.enabled);
+        assert!(!app.vcf.mic.enabled);
         assert!(!app.vcf.bass.enabled);
         assert!(!app.vcf.kanun.enabled);
         assert!(!app.vcf.kick.enabled);
+        assert!(!app.vcf.tanbura.enabled);
         assert_eq!(app.vcf.focus, VcfTarget::Bass);
 
         app.handle_command("vcf bass 900 0.65 3.5");
@@ -2471,7 +2588,7 @@ mod tests {
     #[test]
     fn vcf_wave_is_named() {
         let _guard = session_test_lock();
-        let (tx, _rx) = bounded(16);
+        let (tx, _rx) = bounded(64);
         let mut app = App::new(tx);
 
         app.handle_command("vcf bass 900 0.65 3.5 wave=saw");
@@ -2489,12 +2606,33 @@ mod tests {
         assert_eq!(app.vcf.kanun.target, VcfTarget::Kanun);
         assert_eq!(app.vcf.kanun.wave, VcoWave::Tri);
 
-        app.handle_command("vcf kick cut=700 res=0.25 drive=2.5 wave=squ");
+        app.handle_command("vcf drums cut=700 res=0.25 drive=2.5 wave=squ");
         assert!(app.vcf.bass.enabled);
         assert!(app.vcf.kanun.enabled);
         assert!(app.vcf.kick.enabled);
         assert_eq!(app.vcf.kick.target, VcfTarget::Kick);
         assert_eq!(app.vcf.kick.wave, VcoWave::Squ);
+        assert_eq!(
+            app.phrases.last().unwrap().src,
+            "vcf drums cut 700 res 0.25 drive 2.5 wave squ"
+        );
+
+        app.handle_command("vcf mic cut=1800 res=0.2 drive=1.2 wave=sin");
+        assert!(app.vcf.mic.enabled);
+        assert_eq!(app.vcf.mic.target, VcfTarget::Mic);
+        assert_eq!(app.vcf.mic.cutoff_hz, 1800.0);
+        assert_eq!(app.vcf.mic.wave, VcoWave::Mic);
+
+        app.handle_command("vcf mic cut 1200 res 0.6 drive 2 wave mic");
+        assert!(app.vcf.mic.enabled);
+        assert_eq!(app.vcf.mic.cutoff_hz, 1200.0);
+        assert_eq!(app.vcf.mic.resonance, 0.6);
+        assert_eq!(app.vcf.mic.drive, 2.0);
+        assert_eq!(app.vcf.mic.wave, VcoWave::Mic);
+        assert_eq!(
+            app.phrases.last().unwrap().src,
+            "vcf mic cut 1200 res 0.6 drive 2"
+        );
 
         app.handle_command("vcf sym cut=1800 res=0.7 drive=1.5");
         assert!(app.vcf.tanbura.enabled);
@@ -2511,17 +2649,26 @@ mod tests {
         assert!(app.vcf.kick.enabled);
         assert_eq!(app.vcf.focus, VcfTarget::Bass);
 
-        app.handle_command("vcf all 1200 0.35 1.5 wave=sin");
+        app.handle_command("vcf all 1200 0.35 1.5 wave=saw");
         assert!(app.vcf.all.enabled);
+        assert_eq!(app.vcf.all.wave, VcoWave::Sin);
+        assert!(!app.vcf.mic.enabled);
         assert!(!app.vcf.bass.enabled);
         assert!(!app.vcf.kanun.enabled);
         assert!(!app.vcf.kick.enabled);
+        assert!(!app.vcf.tanbura.enabled);
+        assert_eq!(
+            app.phrases.last().unwrap().src,
+            "vcf all cut 1200 res 0.35 drive 1.5"
+        );
 
         app.handle_command("vcf all off");
         assert!(!app.vcf.all.enabled);
+        assert!(!app.vcf.mic.enabled);
         assert!(!app.vcf.bass.enabled);
         assert!(!app.vcf.kanun.enabled);
         assert!(!app.vcf.kick.enabled);
+        assert!(!app.vcf.tanbura.enabled);
         assert_eq!(app.vcf.focus, VcfTarget::All);
     }
 

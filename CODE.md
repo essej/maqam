@@ -183,9 +183,9 @@ Defines VCF/VCO data and the filter implementation:
 - `VcoWave`
 - `MoogLadder`
 
-`VcfBank` has four slots: `all`, `bass`, `kanun`, and `kick`. `all` is a master
-filter. Per-instrument slots filter only matching `VoiceKind` groups. `all` and
-per-instrument modes are mutually exclusive by design.
+`VcfBank` has slots for `all`, `mic`, `bass`, `kanun`, `drums`, and `sym`.
+`all` is a master filter. Per-item slots filter only matching input or
+`VoiceKind` groups. `all` and per-item modes are mutually exclusive by design.
 
 `advance_tick` applies per-tick automation to enabled slots.
 

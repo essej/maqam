@@ -46,7 +46,8 @@ pub fn serialize_session_v3(phrases: &[Phrase], vol: f32) -> String {
                 }
                 ControlSpec::SetSympathetics(_)
                 | ControlSpec::SetSympatheticDecay(_)
-                | ControlSpec::SetSympatheticGain(_) => {
+                | ControlSpec::SetSympatheticGain(_)
+                | ControlSpec::SetSympathetic(_) => {
                     out.push_str(&format!("Y|{}|{}\n", p.id, escape_field(&p.src)))
                 }
             }

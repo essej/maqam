@@ -3,7 +3,7 @@
 // Comma-separated ajnas form ONE combined scale (stacked, not sequential).
 // The melody walks through all frequencies of all ajnas together.
 
-use crate::command::{FxChange, VcfChange};
+use crate::command::{FxChange, SympatheticChange, VcfChange};
 use crate::fx::FxSettings;
 use crate::synth::{expand_degrees, zigzag_walk};
 use crate::tuning::{snap_to_oud_lattice, Maqam, Pitch};
@@ -75,6 +75,7 @@ pub enum ControlSpec {
     SetSympathetics(bool),
     SetSympatheticDecay(f32),
     SetSympatheticGain(f32),
+    SetSympathetic(SympatheticChange),
 }
 
 #[derive(Debug, Clone)]
@@ -419,4 +420,5 @@ pub enum AudioCmd {
     SetSympathetics(bool),
     SetSympatheticDecay(f32),
     SetSympatheticGain(f32),
+    SetSympathetic(SympatheticChange),
 }
