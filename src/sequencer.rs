@@ -113,6 +113,11 @@ impl Phrase {
     pub fn rhythm_display(&self) -> String {
         self.bar.rhythm_display()
     }
+
+    pub fn pitch_ratios_display(&self) -> String {
+        self.bar.ratio_strs.join(" | ")
+    }
+
     #[allow(dead_code)]
     pub fn is_jump(&self) -> bool {
         self.jump.is_some()

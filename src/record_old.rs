@@ -1096,6 +1096,7 @@ pub fn record_cycle(
                     writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 } else if active {
                     let label = p.display_src();
+                    let ratios = p.pitch_ratios_display();
                     let rhythm_plain = p.bar.rhythm_display();
                     let ctr = format!("[{}/{}]", play_num + 1, p.repeat.max(1));
                     let n = p.bar.events.len().max(1);
@@ -1110,7 +1111,11 @@ pub fn record_cycle(
                                 rhy.push(ch);
                             }
                         }
-                        let body = format!("{ctr:<status_width$} {:<28} {}", label, rhy);
+                        let body = if ratios.is_empty() {
+                            format!("{ctr:<status_width$} {:<28} {}", label, rhy)
+                        } else {
+                            format!("{ctr:<status_width$} {:<28} {}  {}", label, rhy, ratios)
+                        };
                         let text = format!("{color}{marker}{id}{jump_prefix}{body}");
                         let text = preserve_row_spaces(text);
                         writeln!(f, "Dialogue: 2,{ts0},{ts1},Line,,0,0,{margin_v},,{text}")?;
@@ -1118,18 +1123,30 @@ pub fn record_cycle(
                     let phrase_end_s = start_s + n as f64 * subdiv_secs;
                     if phrase_end_s < end_s {
                         let ts0 = fmt_t(phrase_end_s);
-                        let body = format!("{ctr:<status_width$} {:<28} {}", label, rhythm_plain);
+                        let body = if ratios.is_empty() {
+                            format!("{ctr:<status_width$} {:<28} {}", label, rhythm_plain)
+                        } else {
+                            format!(
+                                "{ctr:<status_width$} {:<28} {}  {}",
+                                label, rhythm_plain, ratios
+                            )
+                        };
                         let text = format!("{color}{marker}{id}{jump_prefix}{body}");
                         let text = preserve_row_spaces(text);
                         writeln!(f, "Dialogue: 2,{ts0},{t1},Line,,0,0,{margin_v},,{text}")?;
                     }
                 } else {
                     let label = p.display_src();
+                    let ratios = p.pitch_ratios_display();
                     let rhythm = p.bar.rhythm_display();
                     let total = p.repeat.max(1);
                     let ctr = format!("[1/{total}]");
                     let ctr = format!("{ctr:<status_width$}");
-                    let body = format!("{ctr} {:<28} {}", label, rhythm);
+                    let body = if ratios.is_empty() {
+                        format!("{ctr} {:<28} {}", label, rhythm)
+                    } else {
+                        format!("{ctr} {:<28} {}  {}", label, rhythm, ratios)
+                    };
                     let text = format!("{color}{marker}{id}{jump_prefix}{body}");
                     let text = preserve_row_spaces(text);
                     writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;

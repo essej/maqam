@@ -391,6 +391,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             }
 
             let src_str = format!("{:<28}", phrase.display_src());
+            let ratios = phrase.pitch_ratios_display();
             let rhythm = phrase.rhythm_display();
             let total_plays = phrase.repeat.max(1);
             let displayed_play = if playing {
@@ -436,6 +437,10 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     sty = sty.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
                 }
                 spans.push(Span::styled(ch.to_string(), sty));
+            }
+            if !ratios.is_empty() {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(ratios, Style::default().fg(DIM).bg(BG)));
             }
 
             ListItem::new(Line::from(spans))
