@@ -4,6 +4,7 @@ V|28|vcf kick off
 Y|32|sym on
 Y|33|sym decay 0.999
 Y|34|sym drive 2
+Y|35|sym decay 0.995
 V|21|vcf bass cut 1000 res 0.98 drive 1.25 wave squ
 V|22|vcf kanun cut 1000 res 0.9 drive 1 wave saw
 V|31|vcf bass cut +12t res +0.3t drive 1.24 wave saw
