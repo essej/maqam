@@ -33,6 +33,7 @@ pub struct App {
     pub cursor_pos: usize,
     pub rec_rx: Option<crossbeam_channel::Receiver<Result<String, String>>>,
     llm_rx: Option<crossbeam_channel::Receiver<Result<LlmOutcome, String>>>,
+    llm_history: Vec<LlmChatMessage>,
     session_path: Option<String>,
     next_phrase_id: usize,
     last_rhythm: Vec<u8>,
@@ -68,6 +69,7 @@ impl App {
             cursor_pos: 0,
             rec_rx: None,
             llm_rx: None,
+            llm_history: Vec::new(),
             session_path: None,
             next_phrase_id: 0,
             last_rhythm: vec![3, 3, 2],
@@ -335,11 +337,29 @@ impl App {
         if let Some(rx) = &self.llm_rx {
             if let Ok(result) = rx.try_recv() {
                 match result {
-                    Ok(LlmOutcome::Answer(answer)) => {
+                    Ok(LlmOutcome::Answer {
+                        sent_prompt,
+                        answer,
+                    }) => {
+                        self.remember_llm_exchange(sent_prompt, answer.clone());
                         self.message = Some(answer);
                     }
-                    Ok(LlmOutcome::Edit(commands)) => {
+                    Ok(LlmOutcome::Edit {
+                        sent_prompt,
+                        commands,
+                    }) => {
+                        let returned_commands = commands.join("\n");
                         self.apply_llm_edit_commands(commands);
+                        let application_result = self
+                            .message
+                            .clone()
+                            .unwrap_or_else(|| "LLM edit produced no visible result".into());
+                        self.remember_llm_exchange(
+                            sent_prompt,
+                            format!(
+                                "Tool returned commands:\n{returned_commands}\n\nApplication result:\n{application_result}"
+                            ),
+                        );
                     }
                     Err(e) => {
                         self.message = Some(format!("✗ {e}"));
@@ -561,6 +581,11 @@ impl App {
                 }
             }
             Cmd::Jump { to, times } => {
+                if times <= 1 {
+                    self.message =
+                        Some("✗ jump ×1 is a no-op; use j <id> 2 or omit the jump".into());
+                    return;
+                }
                 let Some(to) = self.resolve_id_ref(to) else {
                     self.message = Some(format!("✗ no phrase id {to}"));
                     return;
@@ -618,6 +643,12 @@ impl App {
             }
 
             Cmd::InsertJump { before, to, times } => {
+                if times <= 1 {
+                    self.message = Some(
+                        "✗ jump ×1 is a no-op; insert a phrase/control line or use j <id> 2".into(),
+                    );
+                    return;
+                }
                 let Some(to) = self.resolve_id_ref(to) else {
                     self.message = Some(format!("✗ no phrase id {to}"));
                     return;
@@ -1110,6 +1141,13 @@ impl App {
             }
 
             Cmd::EditJump { id, to, times } => {
+                if times <= 1 {
+                    self.message = Some(
+                        "✗ jump ×1 is a no-op; edit the row to a phrase/control line or use j <id> 2"
+                            .into(),
+                    );
+                    return;
+                }
                 let Some(id) = self.resolve_id_ref(id) else {
                     self.message = Some(format!("✗ no phrase id {id}"));
                     return;
@@ -1384,7 +1422,12 @@ impl App {
             self.message = Some("✗ already asking LLM".into());
             return;
         }
-        let Some(request) = LlmRequest::from_env(provider, prompt) else {
+        let Some(request) = LlmRequest::from_env(
+            provider,
+            prompt.clone(),
+            self.llm_history.clone(),
+            self.llm_score_context(),
+        ) else {
             self.message = Some(match provider {
                 LlmProvider::ChatGpt => {
                     "✗ environment variable OPENAI_API_KEY needs to be set to talk to chatgpt"
@@ -1402,7 +1445,10 @@ impl App {
         self.llm_rx = Some(rx);
         self.message = Some(format!("asking {provider_name}..."));
         std::thread::spawn(move || {
-            let result = request.send().map(LlmOutcome::Answer);
+            let result = request.send().map(|answer| LlmOutcome::Answer {
+                sent_prompt: prompt,
+                answer,
+            });
             let _ = tx.send(result);
         });
     }
@@ -1413,8 +1459,14 @@ impl App {
                 Some("✗ already asking LLM; wait for the current answer, then try again".into());
             return;
         }
-        let edit_prompt = llm_edit_prompt(&prompt, &self.llm_score_context());
-        let Some(request) = LlmRequest::from_env(provider, edit_prompt) else {
+        let edit_prompt = llm_edit_prompt(&prompt);
+        let sent_prompt = edit_prompt.clone();
+        let Some(request) = LlmRequest::from_env(
+            provider,
+            edit_prompt,
+            self.llm_history.clone(),
+            self.llm_score_context(),
+        ) else {
             self.message = Some(match provider {
                 LlmProvider::ChatGpt => {
                     "✗ environment variable OPENAI_API_KEY needs to be set to ask chatgpt to edit"
@@ -1432,8 +1484,22 @@ impl App {
         self.llm_rx = Some(rx);
         self.message = Some(format!("asking {provider_name} for edits..."));
         std::thread::spawn(move || {
-            let result = request.send_edit().map(LlmOutcome::Edit);
+            let result = request.send_edit().map(|commands| LlmOutcome::Edit {
+                sent_prompt,
+                commands,
+            });
             let _ = tx.send(result);
+        });
+    }
+
+    fn remember_llm_exchange(&mut self, user_prompt: String, assistant_answer: String) {
+        self.llm_history.push(LlmChatMessage {
+            role: LlmRole::User,
+            content: user_prompt,
+        });
+        self.llm_history.push(LlmChatMessage {
+            role: LlmRole::Assistant,
+            content: assistant_answer,
         });
     }
 
@@ -1445,6 +1511,7 @@ impl App {
             );
             return;
         }
+        let commands = minimize_repeated_llm_phrase_commands(commands, self.next_phrase_id);
         let mut parsed_commands = Vec::new();
         for command_src in &commands {
             let parsed = match command::parse(command_src) {
@@ -1516,11 +1583,38 @@ impl App {
 
     fn llm_score_context(&self) -> String {
         if self.phrases.is_empty() {
-            return "score is empty".into();
+            return "score is empty; time steps are sounding phrase repeat passes, not timeline rows"
+                .into();
         }
+        let mut time_step = 0usize;
         self.phrases
             .iter()
-            .map(|phrase| format!("{}: {}", phrase.id, phrase.display_src()))
+            .map(|phrase| {
+                let src = phrase.display_src();
+                if let Some(jump) = &phrase.jump {
+                    return format!(
+                        "{}: {}  [jump row; restarts at id {} for {} passes; consumes no sounding time step]",
+                        phrase.id, src, jump.target_id, jump.times
+                    );
+                }
+                if phrase.control.is_some() {
+                    return format!("{}: {}  [control row; consumes no sounding time step]", phrase.id, src);
+                }
+                let start = time_step;
+                let steps = phrase.repeat.max(1);
+                let end = start + steps - 1;
+                time_step += steps;
+                format!(
+                    "{}: {}  [time steps {}..{}; {} repeat pass(es); rhythm groups {}; {} subdivisions per pass]",
+                    phrase.id,
+                    src,
+                    start,
+                    end,
+                    steps,
+                    rhythm_groups_display(&phrase.bar.groups),
+                    phrase.bar.total_subdivs
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -2251,9 +2345,35 @@ impl App {
     }
 }
 
+fn rhythm_groups_display(groups: &[u8]) -> String {
+    groups
+        .iter()
+        .map(|group| group.to_string())
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 enum LlmOutcome {
-    Answer(String),
-    Edit(Vec<String>),
+    Answer {
+        sent_prompt: String,
+        answer: String,
+    },
+    Edit {
+        sent_prompt: String,
+        commands: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct LlmChatMessage {
+    role: LlmRole,
+    content: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LlmRole {
+    User,
+    Assistant,
 }
 
 struct ScoreSnapshot {
@@ -2272,21 +2392,32 @@ enum LlmRequest {
         key: String,
         model: String,
         prompt: String,
+        history: Vec<LlmChatMessage>,
+        score_context: String,
     },
     Claude {
         key: String,
         model: String,
         prompt: String,
+        history: Vec<LlmChatMessage>,
+        score_context: String,
     },
 }
 
 impl LlmRequest {
-    fn from_env(provider: LlmProvider, prompt: String) -> Option<Self> {
+    fn from_env(
+        provider: LlmProvider,
+        prompt: String,
+        history: Vec<LlmChatMessage>,
+        score_context: String,
+    ) -> Option<Self> {
         match provider {
             LlmProvider::ChatGpt => Some(Self::ChatGpt {
                 key: std::env::var("OPENAI_API_KEY").ok()?,
                 model: std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
                 prompt,
+                history,
+                score_context,
             }),
             LlmProvider::Claude => Some(Self::Claude {
                 key: std::env::var("ANTHROPIC_API_KEY")
@@ -2295,6 +2426,8 @@ impl LlmRequest {
                 model: std::env::var("ANTHROPIC_MODEL")
                     .unwrap_or_else(|_| "claude-3-5-haiku-latest".into()),
                 prompt,
+                history,
+                score_context,
             }),
         }
     }
@@ -2308,30 +2441,58 @@ impl LlmRequest {
 
     fn send(self) -> Result<String, String> {
         match self {
-            Self::ChatGpt { key, model, prompt } => ask_chatgpt(&key, &model, &prompt),
-            Self::Claude { key, model, prompt } => ask_claude(&key, &model, &prompt),
+            Self::ChatGpt {
+                key,
+                model,
+                prompt,
+                history,
+                score_context,
+            } => ask_chatgpt(&key, &model, &prompt, &history, &score_context),
+            Self::Claude {
+                key,
+                model,
+                prompt,
+                history,
+                score_context,
+            } => ask_claude(&key, &model, &prompt, &history, &score_context),
         }
     }
 
     fn send_edit(self) -> Result<Vec<String>, String> {
         match self {
-            Self::ChatGpt { key, model, prompt } => ask_chatgpt_edit(&key, &model, &prompt),
-            Self::Claude { key, model, prompt } => ask_claude_edit(&key, &model, &prompt),
+            Self::ChatGpt {
+                key,
+                model,
+                prompt,
+                history,
+                score_context,
+            } => ask_chatgpt_edit(&key, &model, &prompt, &history, &score_context),
+            Self::Claude {
+                key,
+                model,
+                prompt,
+                history,
+                score_context,
+            } => ask_claude_edit(&key, &model, &prompt, &history, &score_context),
         }
     }
 }
 
-fn ask_chatgpt(key: &str, model: &str, prompt: &str) -> Result<String, String> {
+fn ask_chatgpt(
+    key: &str,
+    model: &str,
+    prompt: &str,
+    history: &[LlmChatMessage],
+    score_context: &str,
+) -> Result<String, String> {
+    let messages = openai_messages(history, prompt, score_context);
     let response: serde_json::Value = ureq::post("https://api.openai.com/v1/chat/completions")
         .set("Authorization", &format!("Bearer {key}"))
         .set("Content-Type", "application/json")
         .timeout(std::time::Duration::from_secs(30))
         .send_json(serde_json::json!({
             "model": model,
-            "messages": [
-                { "role": "system", "content": llm_system_prompt() },
-                { "role": "user", "content": prompt }
-            ],
+            "messages": messages,
             "temperature": 0.2
         }))
         .map_err(describe_http_error)?
@@ -2347,17 +2508,21 @@ fn ask_chatgpt(key: &str, model: &str, prompt: &str) -> Result<String, String> {
         })
 }
 
-fn ask_chatgpt_edit(key: &str, model: &str, prompt: &str) -> Result<Vec<String>, String> {
+fn ask_chatgpt_edit(
+    key: &str,
+    model: &str,
+    prompt: &str,
+    history: &[LlmChatMessage],
+    score_context: &str,
+) -> Result<Vec<String>, String> {
+    let messages = openai_messages(history, prompt, score_context);
     let response: serde_json::Value = ureq::post("https://api.openai.com/v1/chat/completions")
         .set("Authorization", &format!("Bearer {key}"))
         .set("Content-Type", "application/json")
         .timeout(std::time::Duration::from_secs(30))
         .send_json(serde_json::json!({
             "model": model,
-            "messages": [
-                { "role": "system", "content": llm_system_prompt() },
-                { "role": "user", "content": prompt }
-            ],
+            "messages": messages,
             "temperature": 0.2,
             "tools": [openai_apply_commands_tool()],
             "tool_choice": {
@@ -2391,7 +2556,14 @@ fn ask_chatgpt_edit(key: &str, model: &str, prompt: &str) -> Result<Vec<String>,
     extract_tool_commands(&input)
 }
 
-fn ask_claude(key: &str, model: &str, prompt: &str) -> Result<String, String> {
+fn ask_claude(
+    key: &str,
+    model: &str,
+    prompt: &str,
+    history: &[LlmChatMessage],
+    score_context: &str,
+) -> Result<String, String> {
+    let messages = anthropic_messages(history, prompt);
     let response: serde_json::Value = ureq::post("https://api.anthropic.com/v1/messages")
         .set("x-api-key", key)
         .set("anthropic-version", "2023-06-01")
@@ -2400,10 +2572,8 @@ fn ask_claude(key: &str, model: &str, prompt: &str) -> Result<String, String> {
         .send_json(serde_json::json!({
             "model": model,
             "max_tokens": 500,
-            "system": llm_system_prompt(),
-            "messages": [
-                { "role": "user", "content": prompt }
-            ]
+            "system": llm_system_prompt(score_context),
+            "messages": messages
         }))
         .map_err(describe_http_error)?
         .into_json()
@@ -2425,7 +2595,14 @@ fn ask_claude(key: &str, model: &str, prompt: &str) -> Result<String, String> {
         })
 }
 
-fn ask_claude_edit(key: &str, model: &str, prompt: &str) -> Result<Vec<String>, String> {
+fn ask_claude_edit(
+    key: &str,
+    model: &str,
+    prompt: &str,
+    history: &[LlmChatMessage],
+    score_context: &str,
+) -> Result<Vec<String>, String> {
+    let messages = anthropic_messages(history, prompt);
     let response: serde_json::Value = ureq::post("https://api.anthropic.com/v1/messages")
         .set("x-api-key", key)
         .set("anthropic-version", "2023-06-01")
@@ -2434,10 +2611,8 @@ fn ask_claude_edit(key: &str, model: &str, prompt: &str) -> Result<Vec<String>, 
         .send_json(serde_json::json!({
             "model": model,
             "max_tokens": 500,
-            "system": llm_system_prompt(),
-            "messages": [
-                { "role": "user", "content": prompt }
-            ],
+            "system": llm_system_prompt(score_context),
+            "messages": messages,
             "tools": [anthropic_apply_commands_tool()],
             "tool_choice": {
                 "type": "tool",
@@ -2501,6 +2676,52 @@ fn clean_llm_answer(answer: &str) -> String {
     answer.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn openai_messages(
+    history: &[LlmChatMessage],
+    prompt: &str,
+    score_context: &str,
+) -> Vec<serde_json::Value> {
+    let mut messages = vec![serde_json::json!({
+        "role": "system",
+        "content": llm_system_prompt(score_context)
+    })];
+    for message in history {
+        messages.push(serde_json::json!({
+            "role": message.role.as_api_role(),
+            "content": message.content
+        }));
+    }
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": prompt
+    }));
+    messages
+}
+
+fn anthropic_messages(history: &[LlmChatMessage], prompt: &str) -> Vec<serde_json::Value> {
+    let mut messages = Vec::new();
+    for message in history {
+        messages.push(serde_json::json!({
+            "role": message.role.as_api_role(),
+            "content": message.content
+        }));
+    }
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": prompt
+    }));
+    messages
+}
+
+impl LlmRole {
+    fn as_api_role(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+        }
+    }
+}
+
 fn openai_apply_commands_tool() -> serde_json::Value {
     serde_json::json!({
         "type": "function",
@@ -2527,7 +2748,7 @@ fn apply_commands_tool_input_schema() -> serde_json::Value {
         "properties": {
             "commands": {
                 "type": "array",
-                "description": "maqam-live commands to apply. Commands may also contain semicolon-separated maqam-live commands.",
+                "description": "maqam-live commands to apply. Commands may also contain semicolon-separated maqam-live commands. If returning multiple commands, separate them with array items, semicolons, or newlines; never concatenate commands like `sym on sym decay 0.999 drive 2`.",
                 "items": { "type": "string" },
                 "minItems": 1
             }
@@ -2560,27 +2781,90 @@ fn split_tool_command(command: &str) -> Vec<String> {
         .split(';')
         .map(str::trim)
         .filter(|command| !command.is_empty())
-        .map(str::to_string)
+        .flat_map(split_repeated_command_nouns)
         .collect()
+}
+
+fn split_repeated_command_nouns(command: &str) -> Vec<String> {
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 3 || !is_sym_command_noun(tokens[0]) {
+        return vec![command.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    for i in 1..tokens.len() {
+        if is_sym_command_noun(tokens[i]) {
+            chunks.push(tokens[start..i].join(" "));
+            start = i;
+        }
+    }
+    chunks.push(tokens[start..].join(" "));
+    chunks
+}
+
+fn is_sym_command_noun(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "sym" | "sympathetics" | "tanbura" | "tambura"
+    )
 }
 
 fn llm_prompt_is_edit_request(prompt: &str) -> bool {
     let lower = prompt.trim_start().to_ascii_lowercase();
     lower.starts_with("let's ")
         || lower.starts_with("lets ")
+        || lower.starts_with("i need ")
+        || lower.starts_with("we need ")
+        || lower.starts_with("i want ")
+        || lower.starts_with("we want ")
+        || lower.starts_with("please ")
+        || lower.starts_with("can you ")
         || lower.starts_with("make ")
         || lower.starts_with("add ")
         || lower.starts_with("do ")
+        || lower.starts_with("put ")
+        || lower.starts_with("use ")
+        || lower.starts_with("enable ")
+        || lower.starts_with("turn on ")
+        || lower.starts_with("set ")
         || lower.starts_with("create ")
         || lower.starts_with("change ")
         || lower.starts_with("replace ")
         || lower.starts_with("insert ")
         || lower.starts_with("delete ")
+        || llm_prompt_is_how_to_action(&lower)
 }
 
-fn llm_edit_prompt(user_prompt: &str, score_context: &str) -> String {
+fn llm_prompt_is_how_to_action(lower_prompt: &str) -> bool {
+    if lower_prompt.starts_with("what ")
+        || lower_prompt.starts_with("why ")
+        || lower_prompt.contains("valid value")
+        || lower_prompt.contains("valid values")
+        || lower_prompt.contains("explain")
+    {
+        return false;
+    }
+    let actionish = [
+        "how do i get ",
+        "how do i add ",
+        "how do i use ",
+        "how do i enable ",
+        "how do i turn on ",
+        "how can i get ",
+        "how can i add ",
+        "how can i use ",
+        "how can i enable ",
+        "how can i turn on ",
+    ];
+    actionish
+        .iter()
+        .any(|prefix| lower_prompt.starts_with(prefix))
+}
+
+fn llm_edit_prompt(user_prompt: &str) -> String {
     format!(
-        "Reference only; do not copy these lines into your response:\n{score_context}\n\nUser wants this edit:\n{user_prompt}\n\nReturn only new maqam-live commands to apply the edit, separated by newlines or semicolons. Do not include existing score lines, ids, markdown, bullets, explanations, or comments. Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, or clear commands."
+        "User wants this edit:\n{user_prompt}\n\nThis is an action request: make the change with the apply_maqam_commands tool instead of explaining how the user could do it. Use the current score from the system prompt as context. Return only new maqam-live commands to apply the edit, separated by newlines or semicolons. Never concatenate two commands without a separator; use `sym on; sym decay 0.999 drive 2`, not `sym on sym decay 0.999 drive 2`. Do not include existing score lines, ids, markdown, bullets, explanations, or comments. Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, or clear commands."
     )
 }
 
@@ -2627,8 +2911,136 @@ fn llm_edit_command_allowed(cmd: &Cmd) -> bool {
     )
 }
 
-fn llm_system_prompt() -> &'static str {
-    "You help with maqam-live, a terminal live-coding sequencer. Use only this command language; do not invent English aliases. Tempo is `bpm 180`, never `set tempo 180`. Phrases: `<root> <jins> [rhythm]`, `<root> <jins>, <root> <jins> [rhythm]`, optional `r<N>` repeat. Roots: c d e f g a b with optional + or -, e.g. b-. Jins/modes include bayati, hijaz, rast, kurd, saba, ajam, nahawand, major, minor, dorian, phrygian, lydian, mixolydian, aeolian, locrian, diminished. Timeline/edit commands: `i <id> <command>`, `edit <id> <command>`, `j <id> [times]`, `x <id> [id ...]`, `up <id>`, `down <id>`, `rot`, `stop`. Strongly prefer compact edits with jumps (`j <id> [times]`) and phrase repeats (`r<N>`) instead of many near-duplicate phrase lines; keep generated scores readable in about a dozen timeline rows. Settings entries: `bpm <20..400>`, `s <0.05..10>`, `sus <0.05..10>`. Sym: `sym on`, `sym off`, `sym decay <0.9..0.99999>`, `sym drive <0..512>`, `sym decay <n> drive <n> kanun <n> bass <n>`, `sym <mic|kanun|bass|drums> decay <n> drive <n> amount <n>`. VCF: `vcf off`, `vcf <all|mic|bass|kanun|drums|sym> off`, `vcf <target> cut <10..22000> res <0..0.98> drive <0.1..12> wave <sin|tri|squ|saw|mic>`, `cut <hz>`, `res <n>`, `drive <n>`. FX: `reverb on/off`, `reverb mix <0..1> decay <0..0.98>`, `delay on/off`, `delay time <0.01..2> feedback <0..0.95> mix <0..1>`, `fx off`. Create/delete jins: `create <Name> <ratios...>`, `delete <Name>`. For questions, answer concisely and prefer exact commands. For edit requests, use the apply_maqam_commands tool with valid commands only. Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, clear, vol, or tuneto commands."
+fn minimize_repeated_llm_phrase_commands(
+    commands: Vec<String>,
+    next_phrase_id: usize,
+) -> Vec<String> {
+    if commands.len() < 4 {
+        return commands;
+    }
+    let parsed = commands
+        .iter()
+        .map(|command_src| command::parse(command_src))
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(parsed) = parsed else {
+        return commands;
+    };
+
+    let Some(last_non_phrase) = parsed
+        .iter()
+        .rposition(|cmd| !matches!(cmd, Cmd::AddPhrase { .. }))
+    else {
+        return minimize_repeated_phrase_run(&commands, next_phrase_id).unwrap_or(commands);
+    };
+    let run_start = last_non_phrase + 1;
+    if run_start >= parsed.len() || parsed.len() - run_start < 4 {
+        return commands;
+    }
+    let first_phrase_id = next_phrase_id
+        + parsed[..run_start]
+            .iter()
+            .filter(|cmd| llm_edit_command_consumes_timeline_id(cmd))
+            .count();
+    let run = &commands[run_start..];
+    let Some(minimized_run) = minimize_repeated_phrase_run(run, first_phrase_id) else {
+        return commands;
+    };
+
+    let mut out = commands[..run_start].to_vec();
+    out.extend(minimized_run);
+    out
+}
+
+fn minimize_repeated_phrase_run(
+    commands: &[String],
+    first_phrase_id: usize,
+) -> Option<Vec<String>> {
+    let phrase_sources = commands
+        .iter()
+        .map(|command_src| match command::parse(command_src) {
+            Ok(Cmd::AddPhrase { source, repeat, .. }) => Some((source, repeat)),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    let total = phrase_sources.len();
+    for block_len in 1..=total / 2 {
+        if total % block_len != 0 {
+            continue;
+        }
+        let repeats = total / block_len;
+        if repeats < 2 {
+            continue;
+        }
+        let block = &phrase_sources[..block_len];
+        if phrase_sources
+            .chunks(block_len)
+            .all(|candidate| candidate == block)
+        {
+            if block_len == 1 {
+                let (source, repeat) = &block[0];
+                return Some(vec![phrase_source_with_repeat(source, repeat * repeats)]);
+            }
+            let mut out = block
+                .iter()
+                .map(|(source, _repeat)| source.clone())
+                .collect::<Vec<_>>();
+            out.push(format!("j {} {}", first_phrase_id, repeats));
+            return Some(out);
+        }
+    }
+
+    None
+}
+
+fn phrase_source_with_repeat(source: &str, repeat: usize) -> String {
+    let trimmed = source.trim_end();
+    let Some((base, last)) = trimmed.rsplit_once(char::is_whitespace) else {
+        return format!("{trimmed} r{}", repeat.max(1));
+    };
+    let lower = last.to_ascii_lowercase();
+    if lower
+        .strip_prefix('r')
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+    {
+        return format!("{} r{}", base.trim_end(), repeat.max(1));
+    }
+    format!("{trimmed} r{}", repeat.max(1))
+}
+
+fn llm_edit_command_consumes_timeline_id(cmd: &Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::AddPhrase { .. }
+            | Cmd::Jump { .. }
+            | Cmd::Insert { .. }
+            | Cmd::InsertBpm { .. }
+            | Cmd::InsertSustain { .. }
+            | Cmd::InsertVcf { .. }
+            | Cmd::InsertFx { .. }
+            | Cmd::InsertSympathetics { .. }
+            | Cmd::InsertSympatheticDecay { .. }
+            | Cmd::InsertSympatheticGain { .. }
+            | Cmd::InsertSympathetic { .. }
+            | Cmd::InsertJump { .. }
+            | Cmd::Stop
+            | Cmd::Sympathetics(_)
+            | Cmd::SympatheticDecay(_)
+            | Cmd::SympatheticGain(_)
+            | Cmd::Sympathetic(_)
+            | Cmd::SetBpm(_)
+            | Cmd::SetSustain(_)
+            | Cmd::SetVcf(_)
+            | Cmd::SetFx(_)
+    )
+}
+
+fn llm_system_prompt(score_context: &str) -> String {
+    format!(
+        "You help with maqam-live, a terminal live-coding sequencer.\n\n{}\nCurrent score context:\n{}\n\nLLM behavior:\n- The request includes the current score plus prior user prompts and prior assistant answers/tool-command results; use that continuity.\n- For questions, answer concisely and prefer exact commands.\n- For edit requests, use the apply_maqam_commands tool with valid commands only.\n- Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, clear, vol, or tuneto commands.",
+        command::language_reference(),
+        score_context
+    )
 }
 
 fn completion_target(input: &str) -> Option<(&str, usize, String)> {
@@ -3529,6 +3941,29 @@ mod tests {
     }
 
     #[test]
+    fn sympathetic_aliases_and_repeated_noun_parse() {
+        assert!(matches!(
+            command::parse("sympathetics on").unwrap(),
+            Cmd::Sympathetics(true)
+        ));
+        assert!(matches!(
+            command::parse("tanbura off").unwrap(),
+            Cmd::Sympathetics(false)
+        ));
+
+        let parsed = command::parse("sym on sym decay 0.999 drive 2").unwrap();
+        assert!(matches!(
+            parsed,
+            Cmd::Sympathetic(command::SympatheticChange {
+                enabled: Some(true),
+                decay: Some(decay),
+                gain: Some(gain),
+                ..
+            }) if (decay - 0.999).abs() < f32::EPSILON && (gain - 2.0).abs() < f32::EPSILON
+        ));
+    }
+
+    #[test]
     fn loads_and_saves_v3_without_rewriting_input() {
         let _guard = session_test_lock();
         let suffix = SystemTime::now()
@@ -3901,6 +4336,21 @@ mod tests {
     }
 
     #[test]
+    fn jump_times_one_is_noop_and_not_added() {
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+        app.handle_command("d bayati 4444");
+
+        app.handle_command("j 0 1");
+
+        assert_eq!(app.phrases.len(), 1);
+        assert_eq!(
+            app.message.as_deref(),
+            Some("✗ jump ×1 is a no-op; use j <id> 2 or omit the jump")
+        );
+    }
+
+    #[test]
     fn load_tab_completion_lists_and_completes_mq_files() {
         let _guard = session_test_lock();
         let (tx, _rx) = bounded(16);
@@ -4035,6 +4485,8 @@ mod tests {
         assert!(llm_prompt_is_edit_request(
             "let's do an e minor that does a d major hemiola turnaround"
         ));
+        assert!(llm_prompt_is_edit_request("add in sympathetics"));
+        assert!(llm_prompt_is_edit_request("how do i get sympathetics?"));
         assert!(!llm_prompt_is_edit_request(
             "what are the valid values for sym decay?"
         ));
@@ -4096,14 +4548,190 @@ mod tests {
     }
 
     #[test]
+    fn llm_edit_tool_splits_repeated_sym_command_noun() {
+        let commands = extract_tool_commands(&serde_json::json!({
+            "commands": ["sym on sym decay 0.999 drive 2"]
+        }))
+        .unwrap();
+
+        assert_eq!(commands, vec!["sym on", "sym decay 0.999 drive 2"]);
+    }
+
+    #[test]
     fn llm_system_prompt_specifies_command_language() {
-        let prompt = llm_system_prompt();
+        let prompt = llm_system_prompt("0: d bayati 4444\n1: vcf mic cut 1200 res 0.6");
+        let reference = command::language_reference();
         assert!(prompt.contains("bpm 180"));
         assert!(prompt.contains("never `set tempo 180`"));
-        assert!(prompt.contains("Phrases: `<root> <jins> [rhythm]`"));
-        assert!(prompt.contains("Strongly prefer compact edits with jumps"));
+        assert!(prompt.contains("`<root> <jins> [rhythm]`"));
+        assert!(prompt.contains("there is no time signature setting"));
+        assert!(prompt.contains("grouping rhythm chunks"));
+        assert!(prompt.contains("for 7/8 use 43"));
+        assert!(prompt.contains("4433 is two 7/8 bars"));
+        assert!(prompt.contains("16 bars in 7/8 is usually `<root> <jins> 43 r16`"));
+        assert!(prompt.contains("use r8"));
+        assert!(prompt.contains("use jumps only to restart a multi-row section"));
+        assert!(prompt.contains("do not use a jump where one phrase repeat like r16"));
+        assert!(prompt.contains("jump times count passes through the jump row"));
+        assert!(prompt.contains("for a restart after 16 bars"));
+        assert!(prompt.contains("count 16 steps in time, not 16 phrase rows"));
+        assert!(prompt.contains("a jump with times 1 is a no-op"));
+        assert!(prompt.contains("do not generate `j <id> 1`"));
         assert!(prompt.contains("about a dozen timeline rows"));
+        assert!(prompt.contains("sym gain <0..512>"));
+        assert!(prompt.contains("if the user says `add in sympathetics`, make the edit"));
+        assert!(prompt.contains("sym decay 0.999 drive 2 kanun 0.5 bass 0.5"));
+        assert!(prompt.contains("practical edit values are usually 0.5..8"));
+        assert!(prompt.contains("values above 16 are extreme"));
+        assert!(prompt.contains("amount/source sends have hard range 0..512"));
+        assert!(prompt.contains("VCF"));
+        assert!(prompt.contains("Current score context:"));
+        assert!(prompt.contains("0: d bayati 4444"));
+        assert!(prompt.contains("1: vcf mic cut 1200 res 0.6"));
+        assert!(prompt.contains("LLM behavior:"));
+        assert!(
+            prompt.contains("prior user prompts and prior assistant answers/tool-command results")
+        );
+        assert!(reference.contains("Nouns:"));
+        assert!(reference.contains("filter cutoff frequency"));
+        assert!(reference.contains("sympathetic resonator excitation drive"));
         assert!(prompt.contains("Never return save"));
+    }
+
+    #[test]
+    fn llm_message_payloads_include_history_and_current_prompt() {
+        let history = vec![
+            LlmChatMessage {
+                role: LlmRole::User,
+                content: "what is sym?".into(),
+            },
+            LlmChatMessage {
+                role: LlmRole::Assistant,
+                content: "sym controls sympathetics".into(),
+            },
+        ];
+
+        let messages = openai_messages(&history, "how do i filter mic?", "0: d bayati 4444");
+        assert_eq!(
+            messages[0].pointer("/role").and_then(|v| v.as_str()),
+            Some("system")
+        );
+        assert!(messages[0]
+            .pointer("/content")
+            .and_then(|v| v.as_str())
+            .is_some_and(|content| content.contains("0: d bayati 4444")));
+        assert_eq!(
+            messages[1].pointer("/role").and_then(|v| v.as_str()),
+            Some("user")
+        );
+        assert_eq!(
+            messages[1].pointer("/content").and_then(|v| v.as_str()),
+            Some("what is sym?")
+        );
+        assert_eq!(
+            messages[2].pointer("/role").and_then(|v| v.as_str()),
+            Some("assistant")
+        );
+        assert_eq!(
+            messages[3].pointer("/content").and_then(|v| v.as_str()),
+            Some("how do i filter mic?")
+        );
+
+        let anthropic = anthropic_messages(&history, "next question");
+        assert_eq!(anthropic.len(), 3);
+        assert_eq!(
+            anthropic[2].pointer("/content").and_then(|v| v.as_str()),
+            Some("next question")
+        );
+    }
+
+    #[test]
+    fn llm_history_remembers_exact_sent_prompt_and_returned_commands() {
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+        let sent = llm_edit_prompt("make a d major turnaround");
+        let returned = vec!["d major 332".to_string(), "g major 332".to_string()];
+
+        assert!(sent.contains("make the change with the apply_maqam_commands tool"));
+        assert!(sent.contains("Never concatenate two commands without a separator"));
+
+        app.remember_llm_exchange(sent.clone(), returned.join("\n"));
+
+        assert_eq!(app.llm_history.len(), 2);
+        assert_eq!(app.llm_history[0].content, sent);
+        assert_eq!(app.llm_history[1].content, "d major 332\ng major 332");
+    }
+
+    #[test]
+    fn llm_score_context_reports_time_steps_not_just_phrase_rows() {
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+        app.handle_command("d bayati 43 r16");
+
+        let context = app.llm_score_context();
+
+        assert!(context.contains("0: d bayati 43 r16"));
+        assert!(context.contains("time steps 0..15"));
+        assert!(context.contains("16 repeat pass(es)"));
+        assert!(context.contains("rhythm groups 43"));
+        assert!(context.contains("7 subdivisions per pass"));
+    }
+
+    #[test]
+    fn llm_repeated_phrase_suggestions_are_minimized_compactly() {
+        let minimized = minimize_repeated_llm_phrase_commands(
+            vec![
+                "e minor 43".into(),
+                "e minor 43".into(),
+                "e minor 43".into(),
+                "e minor 43".into(),
+            ],
+            7,
+        );
+        assert_eq!(minimized, vec!["e minor 43 r4"]);
+
+        let minimized = minimize_repeated_llm_phrase_commands(
+            vec![
+                "e minor 332".into(),
+                "d major 332332".into(),
+                "e minor 332".into(),
+                "d major 332332".into(),
+                "e minor 332".into(),
+                "d major 332332".into(),
+            ],
+            7,
+        );
+
+        assert_eq!(minimized, vec!["e minor 332", "d major 332332", "j 7 3"]);
+
+        let minimized = minimize_repeated_llm_phrase_commands(
+            vec![
+                "bpm 140".into(),
+                "e minor 332".into(),
+                "d major 332332".into(),
+                "e minor 332".into(),
+                "d major 332332".into(),
+            ],
+            7,
+        );
+        assert_eq!(
+            minimized,
+            vec!["bpm 140", "e minor 332", "d major 332332", "j 8 2"]
+        );
+
+        let untouched = minimize_repeated_llm_phrase_commands(
+            vec![
+                "e minor 332".into(),
+                "bpm 140".into(),
+                "e minor 332".into(),
+                "bpm 140".into(),
+            ],
+            0,
+        );
+        assert_eq!(
+            untouched,
+            vec!["e minor 332", "bpm 140", "e minor 332", "bpm 140"]
+        );
     }
 
     #[test]

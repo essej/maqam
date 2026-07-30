@@ -61,6 +61,11 @@ example, a valid-values question should come back with a command form such as:
 Use sym decay with a value from 0.9 to 0.99999, like sym decay 0.999.
 ```
 
+The LLM sees a generated language reference built from maqam-live's command
+metadata: command nouns, valid patterns, parameter limits, typical values, and
+plain-language descriptions. Press `?` in the TUI to read that same reference in
+the help overlay.
+
 If the API key is missing, maqam-live tells you exactly which environment
 variable to set before trying again.
 
@@ -161,7 +166,7 @@ The sequence is a timeline of musical phrases plus control entries. IDs are
 stable: deleting or moving entries does not renumber existing IDs.
 
 ```text
-j <id> [times]                       jump back to id, then fall through
+j <id> <times>                       jump back to id, then fall through; times 1 is a no-op
 j start [times]                      jump to the current top timeline item
 i <id> <command>                     insert before id
 edit <id> <command>                  replace an entry

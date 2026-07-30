@@ -676,6 +676,17 @@ fn draw_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         }
     }
 
+    lines.push(Line::from(vec![Span::raw("")]));
+    for raw in crate::command::language_reference().lines() {
+        if raw.ends_with(':') {
+            lines.push(Line::from(vec![Span::styled(format!("  {raw}"), heading)]));
+        } else if raw.starts_with("- ") || raw.starts_with("  - ") || raw.starts_with("  note:") {
+            lines.push(Line::from(vec![Span::styled(format!("  {raw}"), dim)]));
+        } else {
+            lines.push(Line::from(vec![Span::raw(format!("  {raw}"))]));
+        }
+    }
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT).bg(BG))

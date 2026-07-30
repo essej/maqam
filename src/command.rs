@@ -83,9 +83,11 @@ impl SympatheticTarget {
 pub struct CommandMetadata {
     pub name: &'static str,
     pub aliases: &'static [&'static str],
+    pub description: &'static str,
     pub targets: &'static [CommandTokenMetadata],
     pub parameters: &'static [CommandParameterMetadata],
     pub first_parameter: &'static str,
+    pub notes: &'static [&'static str],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -98,10 +100,20 @@ pub struct CommandTokenMetadata {
 pub struct CommandParameterMetadata {
     pub name: &'static str,
     pub aliases: &'static [&'static str],
+    pub description: &'static str,
     pub values: &'static [&'static str],
     pub units: &'static str,
     pub lower: Option<f64>,
     pub upper: Option<f64>,
+    pub typical: &'static str,
+    pub notes: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LanguagePatternMetadata {
+    pub syntax: &'static str,
+    pub description: &'static str,
+    pub notes: &'static [&'static str],
 }
 
 const VCF_TARGETS: &[CommandTokenMetadata] = &[
@@ -135,42 +147,57 @@ const VCF_PARAMETERS: &[CommandParameterMetadata] = &[
     CommandParameterMetadata {
         name: "cut",
         aliases: &["cutoff", "freq", "frequency"],
+        description: "filter cutoff frequency",
         values: &[],
         units: "Hz",
         lower: Some(10.0),
         upper: Some(22000.0),
+        typical: "700..4000 for audible sweeps",
+        notes: &[],
     },
     CommandParameterMetadata {
         name: "res",
         aliases: &["q", "reso", "resonance"],
+        description: "filter resonance",
         values: &[],
         units: "",
         lower: Some(0.0),
         upper: Some(0.98),
+        typical: "0.2..0.75",
+        notes: &["values near 0.98 can ring sharply"],
     },
     CommandParameterMetadata {
         name: "drive",
         aliases: &["drv"],
+        description: "filter input drive",
         values: &[],
         units: "",
         lower: Some(0.1),
         upper: Some(12.0),
+        typical: "1..4",
+        notes: &[],
     },
     CommandParameterMetadata {
         name: "wave",
         aliases: &["wav", "shape"],
+        description: "VCO/source waveform used by instrument VCFs",
         values: &["sin", "tri", "squ", "saw", "mic"],
         units: "",
         lower: None,
         upper: None,
+        typical: "target instrument defaults to its own source",
+        notes: &["vcf all ignores wave because it filters the final outgoing mix"],
     },
     CommandParameterMetadata {
         name: "off",
         aliases: &[],
+        description: "turn the selected VCF off",
         values: &[],
         units: "",
         lower: None,
         upper: None,
+        typical: "",
+        notes: &[],
     },
 ];
 
@@ -201,74 +228,104 @@ const SYM_PARAMETERS: &[CommandParameterMetadata] = &[
     CommandParameterMetadata {
         name: "decay",
         aliases: &[],
+        description: "sympathetic string decay time",
         values: &[],
         units: "",
         lower: Some(0.9),
         upper: Some(0.99999),
+        typical: "0.999",
+        notes: &["higher values ring longer"],
     },
     CommandParameterMetadata {
         name: "drive",
         aliases: &["gain"],
+        description: "sympathetic resonator excitation drive",
         values: &[],
         units: "",
         lower: Some(0.0),
         upper: Some(512.0),
+        typical: "0.5..8",
+        notes: &[
+            "default is 2",
+            "values above 16 are extreme unless the user explicitly asks",
+        ],
     },
     CommandParameterMetadata {
         name: "amount",
         aliases: &["amt", "level", "send"],
+        description: "source send amount into a target sympathetic partition",
         values: &[],
         units: "",
         lower: Some(0.0),
         upper: Some(512.0),
+        typical: "0..4",
+        notes: &["hard range is wide for sound design; ordinary edits should stay small"],
     },
     CommandParameterMetadata {
         name: "mic",
         aliases: &["input", "live"],
+        description: "mic source send amount",
         values: &[],
         units: "",
         lower: Some(0.0),
         upper: Some(512.0),
+        typical: "0..4",
+        notes: &[],
     },
     CommandParameterMetadata {
         name: "kanun",
         aliases: &["qanun", "melody"],
+        description: "kanun source send amount",
         values: &[],
         units: "",
         lower: Some(0.0),
         upper: Some(512.0),
+        typical: "0..4",
+        notes: &[],
     },
     CommandParameterMetadata {
         name: "bass",
         aliases: &["sub", "subbass"],
+        description: "bass source send amount",
         values: &[],
         units: "",
         lower: Some(0.0),
         upper: Some(512.0),
+        typical: "0..4",
+        notes: &[],
     },
     CommandParameterMetadata {
         name: "drums",
         aliases: &["drum", "kick", "kicks"],
+        description: "drum source send amount",
         values: &[],
         units: "",
         lower: Some(0.0),
         upper: Some(512.0),
+        typical: "0..4",
+        notes: &[],
     },
     CommandParameterMetadata {
         name: "on",
         aliases: &[],
+        description: "turn sympathetics on",
         values: &[],
         units: "",
         lower: None,
         upper: None,
+        typical: "",
+        notes: &[],
     },
     CommandParameterMetadata {
         name: "off",
         aliases: &[],
+        description: "turn sympathetics off",
         values: &[],
         units: "",
         lower: None,
         upper: None,
+        typical: "",
+        notes: &[],
     },
 ];
 
@@ -277,18 +334,296 @@ pub const VCF_METADATA: CommandMetadata = CommandMetadata {
     aliases: &[
         "filter", "filt", "cut", "cutoff", "res", "q", "drive", "drv",
     ],
+    description: "voltage-controlled filter lines; each target can have its own partition, and vcf all filters the final outgoing mix",
     targets: VCF_TARGETS,
     parameters: VCF_PARAMETERS,
     first_parameter: "cut",
+    notes: &[
+        "named parameters may be combined on one line; omitted values keep their current value",
+        "instrument targets default wave to their own source, so `vcf mic ... wave mic` is redundant",
+        "relative values like cut=+100, res=-0.1, drive=*1.5, and tick values like cut=+2t are accepted",
+    ],
 };
 
 pub const SYM_METADATA: CommandMetadata = CommandMetadata {
     name: "sym",
-    aliases: &[],
+    aliases: &["sympathetics", "tanbura", "tambura"],
+    description: "sympathetic resonator lines partitioned by all, mic, kanun, bass, and drums",
     targets: SYM_TARGETS,
     parameters: SYM_PARAMETERS,
     first_parameter: "decay",
+    notes: &[
+        "named parameters may be combined on one line; omitted values keep their current value",
+        "partitioned lines let mic have different decay, drive, and amount from kanun, bass, or drums",
+        "`gain` is accepted as an alias for `drive`, but prefer `drive` when generating commands",
+    ],
 };
+
+pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
+    LanguagePatternMetadata {
+        syntax: "<root> <jins> [rhythm]",
+        description: "add a phrase using one jins or Western mode",
+        notes: &[
+            "roots are c d e f g a b with optional + or -, e.g. b-",
+            "jins/modes include bayati, hijaz, rast, kurd, saba, ajam, nahawand, major, minor, dorian, phrygian, lydian, mixolydian, aeolian, locrian, diminished",
+            "rhythm is a run of group lengths such as 4444 or 332332",
+            "there is no time signature setting; express time signatures and meter by grouping rhythm chunks",
+            "for 7/8 use 43, 34, 223, or similar groupings; 4433 is two 7/8 bars",
+        ],
+    },
+    LanguagePatternMetadata {
+        syntax: "<root> <jins>, <root> <jins> [rhythm]",
+        description: "add a phrase that changes jins inside the phrase",
+        notes: &["use this for compact turnarounds and mixed modal phrases"],
+    },
+    LanguagePatternMetadata {
+        syntax: "<phrase> r<N>",
+        description: "repeat a phrase locally before moving to the next timeline row",
+        notes: &[
+            "prefer repeats over many duplicated phrase rows",
+            "when the user asks for N bars of one phrase, use r<N>",
+            "16 bars in 7/8 is usually `<root> <jins> 43 r16`; if using a two-bar grouping like 4433, use r8",
+        ],
+    },
+    LanguagePatternMetadata {
+        syntax: "j <id> <times>",
+        description: "jump back or forward to an existing timeline id",
+        notes: &[
+            "use jumps only to restart a multi-row section after its intended duration",
+            "do not use a jump where one phrase repeat like r16 expresses the requested bars",
+            "jump times count passes through the jump row, not phrase rows and not bars",
+            "for a restart after 16 bars, count 16 steps in time, not 16 phrase rows; count time bars from rhythm group totals and phrase repeats, then place one jump at that point",
+            "a jump with times 1 is a no-op; do not generate `j <id> 1`",
+            "keep generated scores readable in about a dozen timeline rows",
+        ],
+    },
+    LanguagePatternMetadata {
+        syntax: "i <id> <command>",
+        description: "insert a phrase or control command before an existing id",
+        notes: &["the current timeline id may be used as the insertion point"],
+    },
+    LanguagePatternMetadata {
+        syntax: "edit <id> <command>",
+        description: "replace an existing timeline row",
+        notes: &["tab completion after edit id should offer the row's current command"],
+    },
+    LanguagePatternMetadata {
+        syntax: "x <id> [id ...]",
+        description: "delete one or more timeline rows",
+        notes: &[],
+    },
+    LanguagePatternMetadata {
+        syntax: "up <id> | down <id> | rot | stop",
+        description: "move rows, rotate the timeline, or insert a stop line",
+        notes: &[],
+    },
+    LanguagePatternMetadata {
+        syntax: "bpm <20..400>",
+        description: "add a tempo control line",
+        notes: &["write `bpm 180`, never `set tempo 180`"],
+    },
+    LanguagePatternMetadata {
+        syntax: "s <0.05..10> | sus <0.05..10>",
+        description: "add a sustain control line in seconds",
+        notes: &[],
+    },
+    LanguagePatternMetadata {
+        syntax: "sym on | sym off",
+        description: "turn sympathetic resonators on or off",
+        notes: &[
+            "if the user says `add in sympathetics`, make the edit; do not merely explain it",
+            "a useful default is `sym on` followed by `sym decay 0.999 drive 2 kanun 0.5 bass 0.5`",
+        ],
+    },
+    LanguagePatternMetadata {
+        syntax: "sym decay <0.9..0.99999> drive <0..512>",
+        description: "set global sympathetic decay and drive on one control line",
+        notes: &[
+            "`sym gain <0..512>` is accepted as an alias for drive",
+            "decay 0.999 is typical",
+            "drive practical edit values are usually 0.5..8",
+            "drive values above 16 are extreme unless the user explicitly asks",
+        ],
+    },
+    LanguagePatternMetadata {
+        syntax: "sym decay <n> drive <n> kanun <n> bass <n>",
+        description: "set multiple sympathetic parameters on a compressed global line",
+        notes: &["only mentioned values change; omitted values keep their current value"],
+    },
+    LanguagePatternMetadata {
+        syntax: "sym <all|mic|kanun|bass|drums> decay <n> drive <n> amount <n>",
+        description: "set one sympathetic partition independently",
+        notes: &[
+            "amount/source sends have hard range 0..512",
+            "practical amount/source send values are usually 0..4",
+        ],
+    },
+    LanguagePatternMetadata {
+        syntax: "vcf off | vcf <all|mic|bass|kanun|drums|sym> off",
+        description: "turn all VCFs off or turn one VCF partition off",
+        notes: &[],
+    },
+    LanguagePatternMetadata {
+        syntax: "vcf <target> cut <10..22000> res <0..0.98> drive <0.1..12> wave <sin|tri|squ|saw|mic>",
+        description: "set one VCF partition with named parameters",
+        notes: &[
+            "only mentioned values change; omitted values keep their current value",
+            "instrument targets default wave to their own source",
+            "vcf all ignores wave and filters the final outgoing mix",
+        ],
+    },
+    LanguagePatternMetadata {
+        syntax: "reverb on/off | reverb mix <0..1> decay <0..0.98>",
+        description: "turn reverb on or off and edit reverb parameters",
+        notes: &["named parameters may be combined on one line"],
+    },
+    LanguagePatternMetadata {
+        syntax: "delay on/off | delay time <0.01..2> feedback <0..0.95> mix <0..1>",
+        description: "turn ping-pong delay on or off and edit delay parameters",
+        notes: &["`pingpong` is accepted as an alias for delay"],
+    },
+    LanguagePatternMetadata {
+        syntax: "fx off",
+        description: "turn reverb and delay off",
+        notes: &[],
+    },
+    LanguagePatternMetadata {
+        syntax: "create <Name> <ratios...> | delete <Name>",
+        description: "create or delete a custom jins",
+        notes: &["ratios use forms like 1/1 9/8 5/4"],
+    },
+];
+
+pub fn language_reference() -> String {
+    let mut out = String::new();
+    out.push_str("maqam-live command language reference\n\n");
+    out.push_str("Core rule: use only this command language; do not invent English aliases.\n\n");
+    out.push_str("Patterns:\n");
+    for pattern in LANGUAGE_PATTERNS {
+        out.push_str("- `");
+        out.push_str(pattern.syntax);
+        out.push_str("`: ");
+        out.push_str(pattern.description);
+        append_notes(&mut out, pattern.notes);
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str("Nouns:\n");
+    for meta in [&VCF_METADATA, &SYM_METADATA] {
+        out.push_str("- `");
+        out.push_str(meta.name);
+        out.push_str("`: ");
+        out.push_str(meta.description);
+        append_aliases(&mut out, meta.aliases);
+        out.push('\n');
+        if !meta.targets.is_empty() {
+            out.push_str("  targets: ");
+            append_tokens(&mut out, meta.targets);
+            out.push('\n');
+        }
+        out.push_str("  first parameter for completion: `");
+        out.push_str(meta.first_parameter);
+        out.push_str("`\n");
+        out.push_str("  parameters:\n");
+        for param in meta.parameters {
+            out.push_str("  - `");
+            out.push_str(param.name);
+            out.push_str("`");
+            append_aliases(&mut out, param.aliases);
+            out.push_str(": ");
+            out.push_str(param.description);
+            append_limits(&mut out, param);
+            if !param.typical.is_empty() {
+                out.push_str("; typical ");
+                out.push_str(param.typical);
+            }
+            append_notes(&mut out, param.notes);
+            out.push('\n');
+        }
+        for note in meta.notes {
+            out.push_str("  note: ");
+            out.push_str(note);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn append_aliases(out: &mut String, aliases: &[&str]) {
+    if aliases.is_empty() {
+        return;
+    }
+    out.push_str(" (aliases: ");
+    for (i, alias) in aliases.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(alias);
+    }
+    out.push(')');
+}
+
+fn append_tokens(out: &mut String, tokens: &[CommandTokenMetadata]) {
+    for (i, token) in tokens.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(token.name);
+        append_aliases(out, token.aliases);
+    }
+}
+
+fn append_limits(out: &mut String, param: &CommandParameterMetadata) {
+    if !param.values.is_empty() {
+        out.push_str("; values ");
+        for (i, value) in param.values.iter().enumerate() {
+            if i > 0 {
+                out.push('|');
+            }
+            out.push_str(value);
+        }
+    }
+    match (param.lower, param.upper) {
+        (Some(lower), Some(upper)) => {
+            out.push_str("; range ");
+            out.push_str(&format_number(lower));
+            out.push_str("..");
+            out.push_str(&format_number(upper));
+        }
+        (Some(lower), None) => {
+            out.push_str("; minimum ");
+            out.push_str(&format_number(lower));
+        }
+        (None, Some(upper)) => {
+            out.push_str("; maximum ");
+            out.push_str(&format_number(upper));
+        }
+        (None, None) => {}
+    }
+    if !param.units.is_empty() {
+        out.push(' ');
+        out.push_str(param.units);
+    }
+}
+
+fn append_notes(out: &mut String, notes: &[&str]) {
+    if notes.is_empty() {
+        return;
+    }
+    out.push_str("; ");
+    out.push_str(&notes.join("; "));
+}
+
+fn format_number(n: f64) -> String {
+    let mut s = format!("{n:.5}");
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    s
+}
 
 pub fn command_metadata(head: &str) -> Option<&'static CommandMetadata> {
     let head = head.to_ascii_lowercase();
@@ -535,9 +870,13 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         "clear" => return Ok(Cmd::Clear),
         "rot" => return Ok(Cmd::Rotate),
         "stop" => return Ok(Cmd::Stop),
-        "sym" => return Ok(Cmd::Sympathetics(true)),
-        "sym on" => return Ok(Cmd::Sympathetics(true)),
-        "sym off" => return Ok(Cmd::Sympathetics(false)),
+        "sym" | "sympathetics" | "tanbura" | "tambura" => return Ok(Cmd::Sympathetics(true)),
+        "sym on" | "sympathetics on" | "tanbura on" | "tambura on" => {
+            return Ok(Cmd::Sympathetics(true));
+        }
+        "sym off" | "sympathetics off" | "tanbura off" | "tambura off" => {
+            return Ok(Cmd::Sympathetics(false));
+        }
         "start" => {
             return Ok(Cmd::TogglePause {
                 start_id: Some(START_REF),
@@ -576,7 +915,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         .collect();
     let al = alpha.to_ascii_lowercase();
 
-    if al == "sym" {
+    if matches!(al.as_str(), "sym" | "sympathetics" | "tanbura" | "tambura") {
         let change = parse_sympathetic_change(input)?;
         return if change.enabled == Some(true)
             && change.target.is_none()
@@ -1109,6 +1448,9 @@ fn parse_sympathetic_change(input: &str) -> Result<SympatheticChange, String> {
             "drums" | "drum" | "kick" | "kicks" => {
                 i += 1;
                 change.drums = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
+                i += 1;
+            }
+            "sym" | "sympathetics" | "tanbura" | "tambura" => {
                 i += 1;
             }
             _ => return Err(usage.into()),
