@@ -16,8 +16,6 @@ terminal HUD.
 
 <video src="maqam-demo.mp4" controls width="100%"></video>
 
-Video: <https://x.com/rrr00bb/status/2082883251006316928>
-
 ## Build
 
 Prerequisites:
