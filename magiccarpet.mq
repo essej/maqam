@@ -1,6 +1,7 @@
 MAQAM_SESSION_V3
 create saba2 1/1 13/12 6/5 5/4
 B|0|180
+V|10|vcf all cut 2400 res 0.65 drive 1
 S|1|2
 P|2|3|d bayati, f hijaz 4444 r
 P|4|1|a saba, c hijaz
