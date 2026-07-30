@@ -935,10 +935,10 @@ pub fn record_cycle(
         writeln!(f, "ScriptType: v4.00+")?;
         writeln!(f, "PlayResX: 1280")?;
         writeln!(f, "PlayResY: 720")?;
-        writeln!(f, "WrapStyle: 0")?;
+        writeln!(f, "WrapStyle: 2")?;
         writeln!(f, "[V4+ Styles]")?;
         writeln!(f,"Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,Strikeout,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding")?;
-        writeln!(f,"Style: Line,{ASS_MONO_FONT},24,&H00A0FF70,&H00A0FF70,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,4,1,7,20,20,10,1")?;
+        writeln!(f,"Style: Line,{ASS_MONO_FONT},24,&H00000000,&H00000000,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,4,1,7,20,20,10,1")?;
         writeln!(f,"Style: URL,Arial,20,&H0078DD78,&H0078DD78,&H00102004,&H00102004,-1,0,0,0,110,102,0,0,1,3,1,1,20,20,38,1")?;
         writeln!(f,"Style: JumpCounter,{ASS_MONO_FONT},18,&H00909090,&H00909090,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,3,1,5,0,0,0,1")?;
         writeln!(f, "[Events]")?;
@@ -1014,7 +1014,10 @@ pub fn record_cycle(
                 entry.sustain,
                 cycle_disp
             );
-            writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,0,,{hdr}")?;
+            writeln!(
+                f,
+                "Dialogue: 2,{t0},{t1},Line,,0,0,0,,{{\\1c&H00A0FF70&}}{hdr}"
+            )?;
             writeln!(
                 f,
                 "Dialogue: 2,{t0},{t1},URL,,0,0,0,,https://github.com/rfielding/maqam"
@@ -1063,11 +1066,7 @@ pub fn record_cycle(
                 }
                 found
             };
-            let display_start =
-                (phrase_idx + phrases.len() - phrases.len() / 2) % phrases.len().max(1);
-            let display_order: Vec<usize> = (0..phrases.len())
-                .map(|offset| (display_start + offset) % phrases.len())
-                .collect();
+            let display_order: Vec<usize> = (0..phrases.len()).collect();
             let display_positions: HashMap<usize, usize> = display_order
                 .iter()
                 .enumerate()
@@ -1099,7 +1098,7 @@ pub fn record_cycle(
                 // One isolated two-cell marker column.  Keep it outside the
                 // jump lanes and counters so every following field remains on
                 // the same monospaced tab regardless of state.
-                let row_guard = "{\\1c&H00000000&}•";
+                let row_guard = "•";
                 let leaving_current = play_num + 1 >= phrases[phrase_idx].repeat.max(1);
                 let marker_head = if active {
                     '▶'
@@ -1164,7 +1163,7 @@ pub fn record_cycle(
                         "  [missing target]"
                     };
                     let text = format!(
-                        "{color}{row_guard}{color}{id}{marker}{jump_prefix}{counter}{}{error}",
+                        "{row_guard}{color}{id}{marker}{jump_prefix}{counter}{}{error}",
                         p.display_src()
                     );
                     let text = preserve_row_spaces(text);
@@ -1176,7 +1175,7 @@ pub fn record_cycle(
                         "[settings]"
                     };
                     let text = format!(
-                        "{color}{row_guard}{color}{id}{marker}{jump_prefix}{:<status_width$} {}",
+                        "{row_guard}{color}{id}{marker}{jump_prefix}{:<status_width$} {}",
                         status,
                         p.display_src()
                     );
@@ -1205,7 +1204,7 @@ pub fn record_cycle(
                             format!("{ctr:<status_width$} {:<28} {}  {}", label, rhy, ratios)
                         };
                         let text =
-                            format!("{color}{row_guard}{color}{id}{marker}{jump_prefix}{body}");
+                            format!("{row_guard}{color}{id}{marker}{jump_prefix}{body}");
                         let text = preserve_row_spaces(text);
                         writeln!(f, "Dialogue: 2,{ts0},{ts1},Line,,0,0,{margin_v},,{text}")?;
                     }
@@ -1221,7 +1220,7 @@ pub fn record_cycle(
                             )
                         };
                         let text =
-                            format!("{color}{row_guard}{color}{id}{marker}{jump_prefix}{body}");
+                            format!("{row_guard}{color}{id}{marker}{jump_prefix}{body}");
                         let text = preserve_row_spaces(text);
                         writeln!(f, "Dialogue: 2,{ts0},{t1},Line,,0,0,{margin_v},,{text}")?;
                     }
@@ -1238,7 +1237,7 @@ pub fn record_cycle(
                         format!("{ctr} {:<28} {}  {}", label, rhythm, ratios)
                     };
                     let text =
-                        format!("{color}{row_guard}{color}{id}{marker}{jump_prefix}{body}");
+                        format!("{row_guard}{color}{id}{marker}{jump_prefix}{body}");
                     let text = preserve_row_spaces(text);
                     writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 }
@@ -1253,7 +1252,7 @@ pub fn record_cycle(
                     let stop_lanes = "    ".repeat(text_jump_routes.len());
                     let stop_status = format!("{:<status_width$} ", "[stop]");
                     let stop_text = preserve_row_spaces(format!(
-                        "{stop_color}{{\\1c&H00000000&}}•{stop_color}---: {stop_marker}{stop_lanes}{stop_status}stop"
+                        "•{stop_color}---: {stop_marker}{stop_lanes}{stop_status}stop"
                     ));
                     writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{stop_text}")?;
                     margin_v += line_h;
@@ -1278,7 +1277,7 @@ pub fn record_cycle(
                 })
                 .unwrap_or_else(|| ("---: ".into(), "stop".into()));
             let stop_text = preserve_row_spaces(format!(
-                "{{\\1c&H00000000&}}•{{\\1c&H0000FF00&}}{stop_id}▶ {stop_lanes}{stop_status}{stop_source}"
+                "•{{\\1c&H0000FF00&}}{stop_id}▶ {stop_lanes}{stop_status}{stop_source}"
             ));
             let stop_margin = 30 + (phrases.len() / 2) * 26;
             writeln!(
