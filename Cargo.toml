@@ -12,6 +12,12 @@ ratatui           = "0.28"
 crossterm         = "0.28"
 crossbeam-channel = "0.5"
 anyhow            = "1.0"
+ureq              = { version = "2.12", features = ["json"] }
+serde_json        = "1.0"
+# Keep ureq's URL/idna tree compatible with rust-toolchain.toml's Rust 1.85.
+url               = "=2.5.4"
+idna              = "=1.0.3"
+idna_adapter      = "=1.1.0"
 
 [target.'cfg(windows)'.dependencies]
 # cpal uses WASAPI on Windows - no extra deps needed

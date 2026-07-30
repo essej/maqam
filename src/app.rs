@@ -1,6 +1,6 @@
 // app.rs — application state, phrases as top-level units
 
-use crate::command::{self, Cmd, JinsSpec, ValueChange};
+use crate::command::{self, Cmd, JinsSpec, LlmProvider, ValueChange};
 use crate::fx::FxSettings;
 use crate::record;
 use crate::sequencer::{build_control_entry, build_phrase, AudioCmd, BarSpec, ControlSpec, Phrase};
@@ -30,6 +30,7 @@ pub struct App {
     pub saved_input: String,
     pub cursor_pos: usize,
     pub rec_rx: Option<crossbeam_channel::Receiver<Result<String, String>>>,
+    pub llm_rx: Option<crossbeam_channel::Receiver<Result<String, String>>>,
     session_path: Option<String>,
     next_phrase_id: usize,
     last_rhythm: Vec<u8>,
@@ -62,6 +63,7 @@ impl App {
             saved_input: String::new(),
             cursor_pos: 0,
             rec_rx: None,
+            llm_rx: None,
             session_path: None,
             next_phrase_id: 0,
             last_rhythm: vec![3, 3, 2],
@@ -313,6 +315,15 @@ impl App {
     // ── Render thread poll ────────────────────────────────────────────────
 
     pub fn tick(&mut self) {
+        if let Some(rx) = &self.llm_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.message = Some(match result {
+                    Ok(answer) => answer,
+                    Err(e) => format!("✗ {e}"),
+                });
+                self.llm_rx = None;
+            }
+        }
         if let Some(rx) = &self.rec_rx {
             if let Ok(result) = rx.try_recv() {
                 match result {
@@ -517,6 +528,9 @@ impl App {
             Cmd::Quit => self.should_quit = true,
             Cmd::Help => {
                 self.show_help = true;
+            }
+            Cmd::AskLlm { provider, prompt } => {
+                self.ask_llm(provider, prompt);
             }
             Cmd::Jump { to, times } => {
                 let Some(to) = self.resolve_id_ref(to) else {
@@ -1325,6 +1339,34 @@ impl App {
         }
     }
 
+    fn ask_llm(&mut self, provider: LlmProvider, prompt: String) {
+        if self.llm_rx.is_some() {
+            self.message = Some("✗ already asking LLM".into());
+            return;
+        }
+        let Some(request) = LlmRequest::from_env(provider, prompt) else {
+            self.message = Some(match provider {
+                LlmProvider::ChatGpt => {
+                    "✗ environment variable OPENAI_API_KEY needs to be set to talk to chatgpt"
+                        .into()
+                }
+                LlmProvider::Claude => {
+                    "✗ environment variable ANTHROPIC_API_KEY or CLAUDE_API_KEY needs to be set to talk to claude"
+                        .into()
+                }
+            });
+            return;
+        };
+        let provider_name = request.provider_name();
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        self.llm_rx = Some(rx);
+        self.message = Some(format!("asking {provider_name}..."));
+        std::thread::spawn(move || {
+            let result = request.send();
+            let _ = tx.send(result);
+        });
+    }
+
     fn save_session(&self, path: &str) -> Result<(), String> {
         let out = crate::session_v3::serialize_session_v3(&self.phrases);
         fs::write(path, out).map_err(|e| e.to_string())
@@ -1987,6 +2029,150 @@ impl App {
         let _ = self.audio_tx.send(AudioCmd::SetCurPhrase(0));
         Ok(())
     }
+}
+
+enum LlmRequest {
+    ChatGpt {
+        key: String,
+        model: String,
+        prompt: String,
+    },
+    Claude {
+        key: String,
+        model: String,
+        prompt: String,
+    },
+}
+
+impl LlmRequest {
+    fn from_env(provider: LlmProvider, prompt: String) -> Option<Self> {
+        match provider {
+            LlmProvider::ChatGpt => Some(Self::ChatGpt {
+                key: std::env::var("OPENAI_API_KEY").ok()?,
+                model: std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
+                prompt,
+            }),
+            LlmProvider::Claude => Some(Self::Claude {
+                key: std::env::var("ANTHROPIC_API_KEY")
+                    .or_else(|_| std::env::var("CLAUDE_API_KEY"))
+                    .ok()?,
+                model: std::env::var("ANTHROPIC_MODEL")
+                    .unwrap_or_else(|_| "claude-3-5-haiku-latest".into()),
+                prompt,
+            }),
+        }
+    }
+
+    fn provider_name(&self) -> &'static str {
+        match self {
+            Self::ChatGpt { .. } => "chatgpt",
+            Self::Claude { .. } => "claude",
+        }
+    }
+
+    fn send(self) -> Result<String, String> {
+        match self {
+            Self::ChatGpt { key, model, prompt } => ask_chatgpt(&key, &model, &prompt),
+            Self::Claude { key, model, prompt } => ask_claude(&key, &model, &prompt),
+        }
+    }
+}
+
+fn ask_chatgpt(key: &str, model: &str, prompt: &str) -> Result<String, String> {
+    let response: serde_json::Value = ureq::post("https://api.openai.com/v1/chat/completions")
+        .set("Authorization", &format!("Bearer {key}"))
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(30))
+        .send_json(serde_json::json!({
+            "model": model,
+            "messages": [
+                { "role": "system", "content": llm_system_prompt() },
+                { "role": "user", "content": prompt }
+            ],
+            "temperature": 0.2
+        }))
+        .map_err(describe_http_error)?
+        .into_json()
+        .map_err(|e| format!("chatgpt response parse failed: {e}"))?;
+    response
+        .pointer("/choices/0/message/content")
+        .and_then(|value| value.as_str())
+        .map(clean_llm_answer)
+        .filter(|answer| !answer.is_empty())
+        .ok_or_else(|| {
+            "chatgpt returned no message content; try asking again, or set OPENAI_MODEL to a chat-capable model".into()
+        })
+}
+
+fn ask_claude(key: &str, model: &str, prompt: &str) -> Result<String, String> {
+    let response: serde_json::Value = ureq::post("https://api.anthropic.com/v1/messages")
+        .set("x-api-key", key)
+        .set("anthropic-version", "2023-06-01")
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(30))
+        .send_json(serde_json::json!({
+            "model": model,
+            "max_tokens": 500,
+            "system": llm_system_prompt(),
+            "messages": [
+                { "role": "user", "content": prompt }
+            ]
+        }))
+        .map_err(describe_http_error)?
+        .into_json()
+        .map_err(|e| format!("claude response parse failed: {e}"))?;
+    response
+        .get("content")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(|text| text.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .map(|answer| clean_llm_answer(&answer))
+        .filter(|answer| !answer.is_empty())
+        .ok_or_else(|| {
+            "claude returned no text content; try asking again, or set ANTHROPIC_MODEL to a messages-capable model".into()
+        })
+}
+
+fn describe_http_error(error: ureq::Error) -> String {
+    match error {
+        ureq::Error::Status(code, response) => {
+            let body = response.into_string().unwrap_or_default();
+            format!(
+                "LLM HTTP {code}: {}; check the API key, model name, and account access, then try again",
+                compact_error_body(&body)
+            )
+        }
+        ureq::Error::Transport(error) => {
+            format!("LLM request failed: {error}; check your network connection and try again")
+        }
+    }
+}
+
+fn compact_error_body(body: &str) -> String {
+    let message = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .or_else(|| value.pointer("/error/error/message"))
+                .and_then(|message| message.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| body.trim().to_string());
+    clean_llm_answer(&message)
+}
+
+fn clean_llm_answer(answer: &str) -> String {
+    answer.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn llm_system_prompt() -> &'static str {
+    "You answer concise usage questions for maqam-live, a terminal live-coding sequencer. Prefer exact commands. Useful controls: sym on/off; sym decay <0.9..0.99999> drive <0..512> amount <0..512>; sym can target all, mic, kanun, bass, drums. VCF controls: vcf [all|mic|bass|kanun|drums|sym] cut <10..22000 Hz> res <0..0.98> drive <0.1..12> wave <sin|tri|squ|saw|mic>; vcf all filters the final mix; instrument targets filter only that partition. Keep answers under three short sentences."
 }
 
 fn completion_target(input: &str) -> Option<(&str, usize, String)> {
@@ -3276,6 +3462,26 @@ mod tests {
         app.cursor_pos = app.input.chars().count();
         app.complete_input();
         assert_eq!(app.input, "edit 4 sym mic decay ");
+    }
+
+    #[test]
+    fn llm_missing_key_error_tells_user_what_to_do() {
+        let _guard = session_test_lock();
+        let old_key = std::env::var("OPENAI_API_KEY").ok();
+        std::env::remove_var("OPENAI_API_KEY");
+
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+        app.handle_command("chatgpt: what is a jins?");
+
+        assert_eq!(
+            app.message.as_deref(),
+            Some("✗ environment variable OPENAI_API_KEY needs to be set to talk to chatgpt")
+        );
+
+        if let Some(key) = old_key {
+            std::env::set_var("OPENAI_API_KEY", key);
+        }
     }
 
     #[test]

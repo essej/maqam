@@ -497,15 +497,34 @@ pub enum Cmd {
     Load {
         path: String,
     },
+    AskLlm {
+        provider: LlmProvider,
+        prompt: String,
+    },
     Clear,
     Help,
     Quit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LlmProvider {
+    ChatGpt,
+    Claude,
 }
 
 pub fn parse(raw: &str) -> Result<Cmd, String> {
     let input = raw.trim();
     if input.is_empty() {
         return Err("empty".into());
+    }
+
+    if let Some((provider, prompt)) = parse_llm_prompt(input) {
+        if prompt.is_empty() {
+            return Err(
+                "type a question after the colon, like chatgpt: how do i set a vcf filter?".into(),
+            );
+        }
+        return Ok(Cmd::AskLlm { provider, prompt });
     }
 
     // ── Exact keyword matches ─────────────────────────────────────────────
@@ -914,6 +933,16 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
         specs: specs?,
         repeat,
     })
+}
+
+fn parse_llm_prompt(input: &str) -> Option<(LlmProvider, String)> {
+    let (head, rest) = input.split_once(':')?;
+    let provider = match head.trim().to_ascii_lowercase().as_str() {
+        "chatgpt" | "gpt" | "openai" => LlmProvider::ChatGpt,
+        "claude" | "anthropic" => LlmProvider::Claude,
+        _ => return None,
+    };
+    Some((provider, rest.trim().to_string()))
 }
 
 fn parse_id_ref(token: &str, usage: &str) -> Result<isize, String> {

@@ -36,6 +36,33 @@ cargo run --release -- "load default.mq" -- "m 1"
 Use `--` between command groups when a single shell invocation should run
 multiple maqam-live commands.
 
+## Get Unstuck
+
+The default way to get help while using the TUI is to ask an LLM from the
+command box. Use this when you forget valid values, command syntax, or which
+control affects which sound.
+
+```text
+chatgpt: what are the valid values for sym decay?
+chatgpt: how do i set a vcf filter on the instrument only?
+claude: how do i get sympathetics?
+claude: what should i type to turn off the bass vcf?
+```
+
+`chatgpt:` requires `OPENAI_API_KEY` in the environment. `claude:` requires
+`ANTHROPIC_API_KEY` or `CLAUDE_API_KEY`. Optional model overrides are
+`OPENAI_MODEL` and `ANTHROPIC_MODEL`.
+
+Good answers should tell you what to type, not just describe the concept. For
+example, a valid-values question should come back with a command form such as:
+
+```text
+Use sym decay with a value from 0.9 to 0.99999, like sym decay 0.999.
+```
+
+If the API key is missing, maqam-live tells you exactly which environment
+variable to set before trying again.
+
 ## Concepts
 
 ### Jins And Maqam

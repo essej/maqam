@@ -40,10 +40,30 @@ fn ffmpeg_status(cmd: &mut Command) -> anyhow::Result<bool> {
         Ok(status) => Ok(status.success()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             anyhow::bail!(
-                "video rendering requires ffmpeg on your PATH; install ffmpeg and try again"
+                "video rendering requires ffmpeg on your PATH; install ffmpeg, or add it to PATH, then run m again"
             )
         }
         Err(err) => Err(err.into()),
+    }
+}
+
+fn ensure_ffmpeg_available() -> anyhow::Result<()> {
+    match Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => anyhow::bail!(
+            "ffmpeg is installed but did not run successfully; run ffmpeg -version in your shell, fix that error, then run m again"
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
+            "video rendering requires ffmpeg on your PATH; install ffmpeg, or add it to PATH, then run m again"
+        ),
+        Err(err) => anyhow::bail!(
+            "could not check ffmpeg: {err}; make sure ffmpeg runs from your shell, then run m again"
+        ),
     }
 }
 
@@ -473,8 +493,11 @@ pub fn record_cycle(
     cycle_repeat: usize,
 ) -> anyhow::Result<String> {
     if phrases.is_empty() {
-        return Err(anyhow::anyhow!("nothing to record"));
+        return Err(anyhow::anyhow!(
+            "nothing to record; add a phrase first, then run m again"
+        ));
     }
+    ensure_ffmpeg_available()?;
     let bar_samples_for = |idx: usize, bpm: f64| -> usize {
         let subdiv_secs = 60.0 / (bpm * 2.0);
         let subdiv_samples = SR * subdiv_secs;
@@ -482,7 +505,9 @@ pub fn record_cycle(
     };
     let (one_cycle_seq, one_cycle_snaps) = expand_one_cycle(&phrases, bpm, sustain, vcf, fx);
     if one_cycle_seq.is_empty() {
-        return Err(anyhow::anyhow!("no musical phrases to render"));
+        return Err(anyhow::anyhow!(
+            "no musical phrases to render; add a non-control phrase first, then run m again"
+        ));
     }
     let cycles = cycle_repeat.max(1);
     let mut tail_sustain = sustain;
@@ -1408,7 +1433,9 @@ pub fn record_cycle(
         };
         if !encoded {
             let _ = std::fs::remove_file(&staged_out);
-            anyhow::bail!("ffmpeg failed to create MP4; details are in {log_path}");
+            anyhow::bail!(
+                "ffmpeg failed to create MP4; read {log_path}, fix the ffmpeg error shown there, then run m again"
+            );
         }
         std::fs::rename(&staged_out, &out)?;
         Ok(out)
@@ -1424,5 +1451,42 @@ fn vcf_target_for_kind(kind: VoiceKind) -> Option<VcfTarget> {
         VoiceKind::MelodyFm => Some(VcfTarget::Kanun),
         VoiceKind::FloorTom => Some(VcfTarget::Kick),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fx::FxSettings;
+    use crate::vcf::VcfBank;
+
+    #[test]
+    fn empty_recording_error_tells_user_what_to_do() {
+        let err = record_cycle(
+            Vec::new(),
+            120.0,
+            1.25,
+            VcfBank::default(),
+            FxSettings::default(),
+            1,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(
+            err,
+            "nothing to record; add a phrase first, then run m again"
+        );
+    }
+
+    #[test]
+    fn missing_ffmpeg_error_tells_user_what_to_do() {
+        let mut cmd = Command::new("maqam-live-definitely-missing-ffmpeg-test-binary");
+        let err = ffmpeg_status(&mut cmd).unwrap_err().to_string();
+
+        assert_eq!(
+            err,
+            "video rendering requires ffmpeg on your PATH; install ffmpeg, or add it to PATH, then run m again"
+        );
     }
 }
