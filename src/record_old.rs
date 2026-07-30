@@ -938,7 +938,7 @@ pub fn record_cycle(
         writeln!(f, "WrapStyle: 2")?;
         writeln!(f, "[V4+ Styles]")?;
         writeln!(f,"Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,Strikeout,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding")?;
-        writeln!(f,"Style: Line,{ASS_MONO_FONT},24,&H00000000,&H00000000,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,4,1,7,20,20,10,1")?;
+        writeln!(f,"Style: Line,{ASS_MONO_FONT},24,&H00000000,&H00000000,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,0,0,7,20,20,10,1")?;
         writeln!(f,"Style: URL,Arial,20,&H0078DD78,&H0078DD78,&H00102004,&H00102004,-1,0,0,0,110,102,0,0,1,3,1,1,20,20,38,1")?;
         writeln!(f,"Style: JumpCounter,{ASS_MONO_FONT},18,&H00909090,&H00909090,&H00102004,&H00102004,-1,0,0,0,100,100,0,0,1,3,1,5,0,0,0,1")?;
         writeln!(f, "[Events]")?;
@@ -1085,35 +1085,8 @@ pub fn record_cycle(
                 .collect();
             let upcoming_jump_source =
                 upcoming_jump_source.and_then(|source| display_positions.get(&source).copied());
-            for (display_pi, &pi) in display_order.iter().enumerate() {
-                let p = &phrases[pi];
-                let active = p.jump.is_none() && pi == phrase_idx;
-                let color = if active {
-                    "{\\1c&H0000FF00&}"
-                } else if Some(pi) == next_phrase_idx {
-                    "{\\1c&H00FF8080&}"
-                } else {
-                    "{\\1c&H00909090&}"
-                };
-                // One isolated two-cell marker column.  Keep it outside the
-                // jump lanes and counters so every following field remains on
-                // the same monospaced tab regardless of state.
-                let row_guard = "•";
-                let leaving_current = play_num + 1 >= phrases[phrase_idx].repeat.max(1);
-                let marker_head = if active {
-                    '▶'
-                } else if Some(pi) == next_phrase_idx {
-                    if leaving_current {
-                        '▸'
-                    } else {
-                        '▷'
-                    }
-                } else {
-                    '·'
-                };
-                let marker = format!("{marker_head} ");
-                let id = format!("{:>3}: ", p.id);
-                let jump_prefix: String = display_jump_routes
+            let jump_prefix_for = |display_pi: usize| -> String {
+                display_jump_routes
                     .iter()
                     .map(|&(target, source, jump_id, times)| {
                         let on_path =
@@ -1142,7 +1115,37 @@ pub fn record_cycle(
                             "│   "
                         }
                     })
-                    .collect();
+                    .collect()
+            };
+            for (display_pi, &pi) in display_order.iter().enumerate() {
+                let p = &phrases[pi];
+                let active = p.jump.is_none() && pi == phrase_idx;
+                let color = if active {
+                    "{\\1c&H0000FF00&}"
+                } else if Some(pi) == next_phrase_idx {
+                    "{\\1c&H00FF8080&}"
+                } else {
+                    "{\\1c&H00909090&}"
+                };
+                // One isolated two-cell marker column.  Keep it outside the
+                // jump lanes and counters so every following field remains on
+                // the same monospaced tab regardless of state.
+                let row_guard = "•";
+                let leaving_current = play_num + 1 >= phrases[phrase_idx].repeat.max(1);
+                let marker_head = if active {
+                    '▶'
+                } else if Some(pi) == next_phrase_idx {
+                    if leaving_current {
+                        '▸'
+                    } else {
+                        '▷'
+                    }
+                } else {
+                    '·'
+                };
+                let marker = format!("{marker_head} ");
+                let id = format!("{:>3}: ", p.id);
+                let jump_prefix = jump_prefix_for(display_pi);
                 if let Some(js) = &p.jump {
                     let (pass, total) = snap
                         .and_then(|s| s.get(&p.id))
@@ -1193,7 +1196,7 @@ pub fn record_cycle(
                         let mut rhy = String::new();
                         for (ci, ch) in rhythm_plain.chars().enumerate() {
                             if ci == si {
-                                rhy.push_str(&format!("{{\\1c&H00000000&\\3c&H00FFFFFF&\\bord6\\shad0}}{ch}{{\\1c&H0000FF00&\\3c&H00000000&\\bord2\\shad0}}"));
+                                rhy.push_str(&format!("{{\\1c&H00000000&\\3c&H00FFFFFF&\\bord6\\shad0}}{ch}{{\\1c&H0000FF00&\\3c&H00000000&\\bord0\\shad0}}"));
                             } else {
                                 rhy.push(ch);
                             }
@@ -1249,7 +1252,7 @@ pub fn record_cycle(
                         "{\\1c&H00909090&}"
                     };
                     let stop_marker = if stopping { "▸ " } else { "· " };
-                    let stop_lanes = "    ".repeat(text_jump_routes.len());
+                    let stop_lanes = jump_prefix_for(display_pi + 1);
                     let stop_status = format!("{:<status_width$} ", "[stop]");
                     let stop_text = preserve_row_spaces(format!(
                         "•{stop_color}---: {stop_marker}{stop_lanes}{stop_status}stop"
@@ -1266,7 +1269,29 @@ pub fn record_cycle(
         let stop_start = fmt_t(sample as f64 / SR);
         let stop_end = fmt_t(total_secs);
         if sample as f64 / SR < total_secs {
-            let stop_lanes = "    ".repeat(text_jump_routes.len());
+            let stop_lanes = explicit_stop_idx.map_or_else(
+                || "    ".repeat(text_jump_routes.len()),
+                |stop_idx| {
+                    text_jump_routes
+                        .iter()
+                        .map(|&(target, source, _jump_id, _times)| {
+                            if target.min(source) <= stop_idx && stop_idx <= target.max(source) {
+                                if stop_idx == target {
+                                    if target < source {
+                                        "┌──>"
+                                    } else {
+                                        "└──>"
+                                    }
+                                } else {
+                                    "│   "
+                                }
+                            } else {
+                                "    "
+                            }
+                        })
+                        .collect::<String>()
+                },
+            );
             let stop_status = format!("{:<status_width$} ", "[stop]");
             let (stop_id, stop_source) = explicit_stop_idx
                 .map(|index| {
