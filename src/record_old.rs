@@ -749,10 +749,12 @@ pub fn record_cycle(
                 }
             }
             let (l, r) = if render_fx.active() {
-                fx_processor.process(l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0))
+                let (fx_l, fx_r) = crate::analog::soft_clip_stereo(l, r);
+                fx_processor.process(fx_l, fx_r)
             } else {
-                (l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0))
+                crate::analog::soft_clip_stereo(l, r)
             };
+            let (l, r) = crate::analog::soft_clip_stereo(l, r);
             left_buf.push(l);
             right_buf.push(r);
             voices.retain(|v| !v.done);
@@ -878,10 +880,12 @@ pub fn record_cycle(
             }
         }
         let (l, r) = if tail_fx.active() {
-            fx_processor.process(l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0))
+            let (fx_l, fx_r) = crate::analog::soft_clip_stereo(l, r);
+            fx_processor.process(fx_l, fx_r)
         } else {
-            (l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0))
+            crate::analog::soft_clip_stereo(l, r)
         };
+        let (l, r) = crate::analog::soft_clip_stereo(l, r);
         left_buf.push(l);
         right_buf.push(r);
         voices.retain(|v| !v.done);

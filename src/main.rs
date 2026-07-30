@@ -1,5 +1,6 @@
 // main.rs — maqam-live: real-time maqam sequencer / REPL
 
+mod analog;
 mod app;
 mod audio;
 mod carpet;

@@ -799,8 +799,9 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     left = processed.0;
                     right = processed.1;
                 }
-                left = (left * vol).clamp(-1.0, 1.0);
-                right = (right * vol).clamp(-1.0, 1.0);
+                let saturated = crate::analog::soft_clip_stereo(left * vol, right * vol);
+                left = saturated.0.clamp(-1.0, 1.0);
+                right = saturated.1.clamp(-1.0, 1.0);
 
                 if frame.len() >= 2 {
                     frame[0] = left;
