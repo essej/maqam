@@ -4,6 +4,7 @@ use crate::command::{self, Cmd, JinsSpec, LlmProvider, ValueChange};
 use crate::fx::FxSettings;
 use crate::record;
 use crate::sequencer::{build_control_entry, build_phrase, AudioCmd, BarSpec, ControlSpec, Phrase};
+use crate::tuning::Pitch;
 use crate::vcf::{VcfBank, VcfSettings, VcfTarget, VcoWave};
 use crossbeam_channel::Sender;
 use std::fs;
@@ -22,6 +23,7 @@ pub struct App {
     pub vcf: VcfBank,
     pub fx: FxSettings,
     pub vol: f32,
+    pub tune_to: Pitch,
     pub paused: bool,
     pub should_quit: bool,
     pub last_recording: Option<String>,
@@ -42,7 +44,8 @@ pub struct App {
 
 impl App {
     pub fn new(audio_tx: Sender<AudioCmd>) -> Self {
-        App {
+        crate::tuning::reset_tuning_base();
+        let mut app = App {
             phrases: Vec::new(),
             input: String::new(),
             message: Some("? for help".into()),
@@ -55,6 +58,7 @@ impl App {
             vcf: VcfBank::default(),
             fx: FxSettings::default(),
             vol: 1.0,
+            tune_to: Pitch::parse("d").unwrap(),
             paused: false,
             should_quit: false,
             last_recording: None,
@@ -70,7 +74,12 @@ impl App {
             auditioning_jins: false,
             audio_tx,
             clockout_tx: None,
+        };
+        if let Err(err) = app.load_globals() {
+            app.message = Some(format!("✗ {err}"));
         }
+        let _ = app.audio_tx.send(AudioCmd::SetVol(app.vol));
+        app
     }
 
     // ── History ───────────────────────────────────────────────────────────
@@ -94,6 +103,14 @@ impl App {
                 .file_name()
                 .and_then(|filename| filename.to_str())
         })
+    }
+
+    pub fn globals_filename(&self) -> String {
+        self.globals_path()
+            .file_name()
+            .and_then(|filename| filename.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| ".globals.ml".to_string())
     }
 
     pub fn history_up(&mut self) {
@@ -809,7 +826,10 @@ impl App {
             Cmd::SetVol(v) => {
                 self.vol = v;
                 let _ = self.audio_tx.send(AudioCmd::SetVol(v));
-                self.message = Some(format!("vol → {v:.2}"));
+                self.message = Some(match self.save_globals() {
+                    Ok(()) => format!("vol → {v:.2}"),
+                    Err(err) => format!("✗ {err}"),
+                });
             }
 
             Cmd::Record(reps) => {
@@ -1013,6 +1033,15 @@ impl App {
                 let _ = self.audio_tx.send(AudioCmd::SetBpm(bpm));
                 self.push_clockout_bpm(bpm);
                 self.message = Some(format!("BPM line → {bpm:.2}"));
+            }
+            Cmd::TuneTo(pitch) => {
+                crate::tuning::tune_to_standard_pitch(pitch);
+                self.tune_to = pitch;
+                let src = tune_to_src(pitch);
+                self.message = Some(match self.save_globals() {
+                    Ok(()) => format!("{src} → standard MIDI {}", pitch.source_token()),
+                    Err(err) => format!("✗ {err}"),
+                });
             }
             Cmd::SetSustain(change) => {
                 let secs = match apply_sustain_change(self.sustain, change) {
@@ -1370,6 +1399,68 @@ impl App {
     fn save_session(&self, path: &str) -> Result<(), String> {
         let out = crate::session_v3::serialize_session_v3(&self.phrases);
         fs::write(path, out).map_err(|e| e.to_string())
+    }
+
+    fn globals_path(&self) -> PathBuf {
+        #[cfg(test)]
+        let default = || std::env::temp_dir().join("maqam-live-default-test.globals.ml");
+        #[cfg(not(test))]
+        let default = || PathBuf::from(".globals.ml");
+
+        std::env::var("MAQAM_GLOBALS_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default())
+    }
+
+    fn save_globals(&self) -> Result<(), String> {
+        let path = self.globals_path();
+        let out = format!("vol {}\ntuneto {}\n", self.vol, self.tune_to.source_token());
+        fs::write(&path, out).map_err(|e| {
+            format!(
+                "could not write {}; check directory permissions, then try the command again: {e}",
+                path.display()
+            )
+        })
+    }
+
+    fn load_globals(&mut self) -> Result<(), String> {
+        let path = self.globals_path();
+        let source = match fs::read_to_string(&path) {
+            Ok(source) => source,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                return Err(format!(
+                    "could not read {}; check file permissions or remove the file, then restart maqam-live: {err}",
+                    path.display()
+                ));
+            }
+        };
+
+        for (idx, raw_line) in source.lines().enumerate() {
+            let line_no = idx + 1;
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parsed = command::parse(line)
+                .map_err(|e| format!("{} line {line_no}: {e}", path.display()))?;
+            match parsed {
+                Cmd::SetVol(value) => {
+                    self.vol = value;
+                }
+                Cmd::TuneTo(pitch) => {
+                    self.tune_to = pitch;
+                    crate::tuning::tune_to_standard_pitch(pitch);
+                }
+                _ => {
+                    return Err(format!(
+                        "{} line {line_no}: globals only support vol and tuneto; remove this line or change it to vol <n> or tuneto <pitch>",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn load_session(&mut self, path: &str) -> Result<(), String> {
@@ -2837,6 +2928,10 @@ fn value_change_src(change: ValueChange) -> String {
     }
 }
 
+fn tune_to_src(pitch: crate::tuning::Pitch) -> String {
+    format!("tuneto {}", pitch.source_token())
+}
+
 fn fx_change_src(change: command::FxChange) -> String {
     if change.reverb_enabled == Some(false) && change.delay_enabled == Some(false) {
         return "fx off".to_string();
@@ -3125,6 +3220,7 @@ mod tests {
         let saved = fs::read_to_string(&output_path).unwrap();
         assert!(saved.starts_with("MAQAM_SESSION_V3\n"));
         assert!(!saved.contains("\nvol "));
+        assert!(!saved.contains("tuneto"));
         assert!(saved.contains("B|4|180\n"));
         assert!(saved.contains("Y|8|sym on\n"));
         assert!(saved.contains("Y|9|sym gain 64\n"));
@@ -3133,6 +3229,91 @@ mod tests {
 
         let _ = fs::remove_file(input_path);
         let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn tuneto_is_live_state_and_not_saved_in_sessions() {
+        let _guard = session_test_lock();
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output_path = std::env::temp_dir().join(format!("maqam-tuneto-output-{suffix}.mq"));
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+
+        app.handle_command("tuneto a");
+        assert_eq!(app.phrases.len(), 0);
+        app.handle_command("a major 44");
+        assert!((app.phrases[0].bar.root_hz - 440.0).abs() < 0.0001);
+
+        app.save_session(output_path.to_str().unwrap()).unwrap();
+        let saved = fs::read_to_string(&output_path).unwrap();
+        assert!(!saved.contains("tuneto"));
+        assert!(saved.contains("P|0|1|a major 44\n"));
+
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn globals_are_written_immediately_when_live_settings_change() {
+        let _guard = session_test_lock();
+        let old_path = std::env::var("MAQAM_GLOBALS_PATH").ok();
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let globals_path = std::env::temp_dir().join(format!("maqam-globals-{suffix}.ml"));
+        std::env::set_var("MAQAM_GLOBALS_PATH", &globals_path);
+
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+        app.handle_command("vol 0.7");
+        assert_eq!(
+            fs::read_to_string(&globals_path).unwrap(),
+            "vol 0.7\ntuneto d\n"
+        );
+
+        app.handle_command("tuneto a");
+        assert_eq!(
+            fs::read_to_string(&globals_path).unwrap(),
+            "vol 0.7\ntuneto a\n"
+        );
+        assert!((crate::tuning::pitch_to_hz('a', 0, 4) - 440.0).abs() < 0.0001);
+
+        let _ = fs::remove_file(&globals_path);
+        if let Some(path) = old_path {
+            std::env::set_var("MAQAM_GLOBALS_PATH", path);
+        } else {
+            std::env::remove_var("MAQAM_GLOBALS_PATH");
+        }
+    }
+
+    #[test]
+    fn globals_load_on_startup() {
+        let _guard = session_test_lock();
+        let old_path = std::env::var("MAQAM_GLOBALS_PATH").ok();
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let globals_path = std::env::temp_dir().join(format!("maqam-globals-load-{suffix}.ml"));
+        fs::write(&globals_path, "vol 0.25\ntuneto a\n").unwrap();
+        std::env::set_var("MAQAM_GLOBALS_PATH", &globals_path);
+
+        let (tx, rx) = bounded(16);
+        let app = App::new(tx);
+        assert_eq!(app.vol, 0.25);
+        assert_eq!(app.tune_to.source_token(), "a");
+        assert!(matches!(rx.try_recv(), Ok(AudioCmd::SetVol(v)) if (v - 0.25).abs() < 0.0001));
+        assert!((crate::tuning::pitch_to_hz('a', 0, 4) - 440.0).abs() < 0.0001);
+
+        let _ = fs::remove_file(&globals_path);
+        if let Some(path) = old_path {
+            std::env::set_var("MAQAM_GLOBALS_PATH", path);
+        } else {
+            std::env::remove_var("MAQAM_GLOBALS_PATH");
+        }
     }
 
     #[test]

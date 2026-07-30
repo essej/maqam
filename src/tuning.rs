@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 pub const D_HZ: f64 = 293.6648_f64;
+static TUNING_BASE_HZ: OnceLock<RwLock<f64>> = OnceLock::new();
 
 fn clamp(x: f64) -> u8 {
     x.round().clamp(0.0, 255.0) as u8
@@ -51,20 +52,46 @@ fn pitch_ratio(letter: char, accidental: i8) -> (u32, u32) {
     (1, 1)
 }
 
+fn tuning_base_hz() -> f64 {
+    *TUNING_BASE_HZ
+        .get_or_init(|| RwLock::new(D_HZ))
+        .read()
+        .unwrap()
+}
+
+pub fn reset_tuning_base() {
+    *TUNING_BASE_HZ
+        .get_or_init(|| RwLock::new(D_HZ))
+        .write()
+        .unwrap() = D_HZ;
+}
+
+pub fn tune_to_standard_pitch(pitch: Pitch) {
+    let (p, q) = pitch_ratio(pitch.letter, pitch.accidental);
+    let ratio = p as f64 / q as f64;
+    let octave = 2f64.powi(pitch.octave as i32 - 4);
+    let base = pitch.standard_midi_hz() / (ratio * octave);
+    *TUNING_BASE_HZ
+        .get_or_init(|| RwLock::new(D_HZ))
+        .write()
+        .unwrap() = base;
+}
+
 pub fn pitch_to_hz(letter: char, accidental: i8, octave: u8) -> f64 {
     let (p, q) = pitch_ratio(letter, accidental);
-    D_HZ * p as f64 / q as f64 * 2f64.powi(octave as i32 - 4)
+    tuning_base_hz() * p as f64 / q as f64 * 2f64.powi(octave as i32 - 4)
 }
 
 pub fn snap_to_oud_lattice(nominal_hz: f64) -> f64 {
+    let base_hz = tuning_base_hz();
     let mut hz = nominal_hz;
-    while hz < D_HZ {
+    while hz < base_hz {
         hz *= 2.0;
     }
-    while hz >= D_HZ * 2.0 {
+    while hz >= base_hz * 2.0 {
         hz /= 2.0;
     }
-    let ratio = hz / D_HZ;
+    let ratio = hz / base_hz;
     let mut best_hz = hz;
     let mut best_dist = f64::MAX;
     for &(_, p, q) in PITCH_TABLE {
@@ -72,7 +99,7 @@ pub fn snap_to_oud_lattice(nominal_hz: f64) -> f64 {
         let dist = (r / ratio).log2().abs();
         if dist < best_dist {
             best_dist = dist;
-            best_hz = D_HZ * r;
+            best_hz = base_hz * r;
         }
     }
     best_hz
@@ -335,7 +362,9 @@ fn color_for_ratio_key(key: &str) -> [u8; 3] {
 
 #[cfg(test)]
 mod tests {
-    use super::default_registry_map;
+    use super::{
+        default_registry_map, pitch_to_hz, reset_tuning_base, tune_to_standard_pitch, Pitch,
+    };
 
     #[test]
     fn zamzam_is_a_builtin_jins() {
@@ -398,11 +427,25 @@ mod tests {
             ])
         );
     }
+
+    #[test]
+    fn tuneto_anchors_lattice_pitch_to_standard_midi_pitch() {
+        reset_tuning_base();
+        assert!((pitch_to_hz('d', 0, 4) - 293.6648).abs() < 0.0001);
+
+        tune_to_standard_pitch(Pitch::parse("a").unwrap());
+        assert!((pitch_to_hz('a', 0, 4) - 440.0).abs() < 0.0001);
+
+        tune_to_standard_pitch(Pitch::parse("c").unwrap());
+        assert!((pitch_to_hz('c', 0, 4) - 261.625_565).abs() < 0.0001);
+
+        reset_tuning_base();
+    }
 }
 
 // ── Pitch ─────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pitch {
     pub letter: char,
     pub accidental: i8,
@@ -443,6 +486,34 @@ impl Pitch {
 
     pub fn to_hz(self) -> f64 {
         pitch_to_hz(self.letter, self.accidental, self.octave)
+    }
+
+    pub fn standard_midi_hz(self) -> f64 {
+        let pitch_class = match self.letter.to_ascii_lowercase() {
+            'c' => 0,
+            'd' => 2,
+            'e' => 4,
+            'f' => 5,
+            'g' => 7,
+            'a' => 9,
+            'b' => 11,
+            _ => 0,
+        } + self.accidental as i32;
+        let midi = (self.octave as i32 + 1) * 12 + pitch_class;
+        440.0 * 2f64.powf((midi as f64 - 69.0) / 12.0)
+    }
+
+    pub fn source_token(self) -> String {
+        let mut s = self.letter.to_ascii_lowercase().to_string();
+        match self.accidental {
+            1 => s.push('+'),
+            -1 => s.push('-'),
+            _ => {}
+        }
+        if self.octave != 4 {
+            s.push(char::from(b'0' + self.octave));
+        }
+        s
     }
 
     #[allow(dead_code)]

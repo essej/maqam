@@ -214,6 +214,7 @@ bpm <n|+n|-n|*k|/k>                  tempo, range 20..400
 s <n|+n|-n|*k|/k>                    sustain seconds, range 0.05..10
 sus <n|+n|-n|*k|/k>                  same as s
 vol <n>                              live volume multiplier, range 0..2
+tuneto <pitch>                       live tuning reference, e.g. tuneto c or tuneto b-
 ```
 
 Examples:
@@ -226,8 +227,8 @@ s *0.8
 vol 0.8
 ```
 
-`vol` is a live-only setting. It is not saved in sessions and legacy `vol`
-lines are ignored when loading.
+`vol` and `tuneto` are live-only settings. They are not saved in sessions, and
+legacy `vol` lines are ignored when loading.
 
 ### VCF And VCO
 

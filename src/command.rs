@@ -472,6 +472,7 @@ pub enum Cmd {
     SympatheticGain(f32),
     Sympathetic(SympatheticChange),
     SetBpm(ValueChange),
+    TuneTo(Pitch),
     SetSustain(ValueChange),
     SetVcf(VcfChange),
     SetFx(FxChange),
@@ -777,6 +778,18 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             .ok_or("usage: bpm <tempo|*k|/k|+n|-n>")?;
         let change = ValueChange::parse(tok, "usage: bpm <tempo|*k|/k|+n|-n>")?;
         return Ok(Cmd::SetBpm(change));
+    }
+
+    // ── TUNE REFERENCE ───────────────────────────────────────────────────
+    if al == "tuneto" {
+        let tok = input
+            .split_whitespace()
+            .nth(1)
+            .ok_or("type a pitch after tuneto, like tuneto c or tuneto b-")?;
+        let pitch = Pitch::parse(tok).ok_or_else(|| {
+            format!("unknown pitch '{tok}'; type a pitch like c, d, a, or b- after tuneto")
+        })?;
+        return Ok(Cmd::TuneTo(pitch));
     }
 
     // ── SUSTAIN ───────────────────────────────────────────────────────────
