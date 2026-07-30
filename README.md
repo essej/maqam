@@ -14,7 +14,7 @@ terminal HUD.
 
 ## Demo
 
-<video src="maqam-demo.mp4" controls width="100%"></video>
+<video controls width="100%" src="https://raw.githubusercontent.com/rfielding/maqam/main/maqam-demo.mp4"></video>
 
 ## Build
 
