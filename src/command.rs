@@ -80,6 +80,242 @@ impl SympatheticTarget {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct CommandMetadata {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub targets: &'static [CommandTokenMetadata],
+    pub parameters: &'static [CommandParameterMetadata],
+    pub first_parameter: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CommandTokenMetadata {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CommandParameterMetadata {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub values: &'static [&'static str],
+    pub units: &'static str,
+    pub lower: Option<f64>,
+    pub upper: Option<f64>,
+}
+
+const VCF_TARGETS: &[CommandTokenMetadata] = &[
+    CommandTokenMetadata {
+        name: "all",
+        aliases: &["mix", "master"],
+    },
+    CommandTokenMetadata {
+        name: "mic",
+        aliases: &["input", "live"],
+    },
+    CommandTokenMetadata {
+        name: "bass",
+        aliases: &["sub", "subbass"],
+    },
+    CommandTokenMetadata {
+        name: "kanun",
+        aliases: &["qanun", "melody"],
+    },
+    CommandTokenMetadata {
+        name: "drums",
+        aliases: &["drum", "kick", "kicks"],
+    },
+    CommandTokenMetadata {
+        name: "sym",
+        aliases: &["tanbura", "tambura", "sympathetics"],
+    },
+];
+
+const VCF_PARAMETERS: &[CommandParameterMetadata] = &[
+    CommandParameterMetadata {
+        name: "cut",
+        aliases: &["cutoff", "freq", "frequency"],
+        values: &[],
+        units: "Hz",
+        lower: Some(10.0),
+        upper: Some(22000.0),
+    },
+    CommandParameterMetadata {
+        name: "res",
+        aliases: &["q", "reso", "resonance"],
+        values: &[],
+        units: "",
+        lower: Some(0.0),
+        upper: Some(0.98),
+    },
+    CommandParameterMetadata {
+        name: "drive",
+        aliases: &["drv"],
+        values: &[],
+        units: "",
+        lower: Some(0.1),
+        upper: Some(12.0),
+    },
+    CommandParameterMetadata {
+        name: "wave",
+        aliases: &["wav", "shape"],
+        values: &["sin", "tri", "squ", "saw", "mic"],
+        units: "",
+        lower: None,
+        upper: None,
+    },
+    CommandParameterMetadata {
+        name: "off",
+        aliases: &[],
+        values: &[],
+        units: "",
+        lower: None,
+        upper: None,
+    },
+];
+
+const SYM_TARGETS: &[CommandTokenMetadata] = &[
+    CommandTokenMetadata {
+        name: "all",
+        aliases: &["mix", "master"],
+    },
+    CommandTokenMetadata {
+        name: "mic",
+        aliases: &["input", "live"],
+    },
+    CommandTokenMetadata {
+        name: "kanun",
+        aliases: &["qanun", "melody"],
+    },
+    CommandTokenMetadata {
+        name: "bass",
+        aliases: &["sub", "subbass"],
+    },
+    CommandTokenMetadata {
+        name: "drums",
+        aliases: &["drum", "kick", "kicks"],
+    },
+];
+
+const SYM_PARAMETERS: &[CommandParameterMetadata] = &[
+    CommandParameterMetadata {
+        name: "decay",
+        aliases: &[],
+        values: &[],
+        units: "",
+        lower: Some(0.9),
+        upper: Some(0.99999),
+    },
+    CommandParameterMetadata {
+        name: "drive",
+        aliases: &["gain"],
+        values: &[],
+        units: "",
+        lower: Some(0.0),
+        upper: Some(512.0),
+    },
+    CommandParameterMetadata {
+        name: "amount",
+        aliases: &["amt", "level", "send"],
+        values: &[],
+        units: "",
+        lower: Some(0.0),
+        upper: Some(512.0),
+    },
+    CommandParameterMetadata {
+        name: "mic",
+        aliases: &["input", "live"],
+        values: &[],
+        units: "",
+        lower: Some(0.0),
+        upper: Some(512.0),
+    },
+    CommandParameterMetadata {
+        name: "kanun",
+        aliases: &["qanun", "melody"],
+        values: &[],
+        units: "",
+        lower: Some(0.0),
+        upper: Some(512.0),
+    },
+    CommandParameterMetadata {
+        name: "bass",
+        aliases: &["sub", "subbass"],
+        values: &[],
+        units: "",
+        lower: Some(0.0),
+        upper: Some(512.0),
+    },
+    CommandParameterMetadata {
+        name: "drums",
+        aliases: &["drum", "kick", "kicks"],
+        values: &[],
+        units: "",
+        lower: Some(0.0),
+        upper: Some(512.0),
+    },
+    CommandParameterMetadata {
+        name: "on",
+        aliases: &[],
+        values: &[],
+        units: "",
+        lower: None,
+        upper: None,
+    },
+    CommandParameterMetadata {
+        name: "off",
+        aliases: &[],
+        values: &[],
+        units: "",
+        lower: None,
+        upper: None,
+    },
+];
+
+pub const VCF_METADATA: CommandMetadata = CommandMetadata {
+    name: "vcf",
+    aliases: &[
+        "filter", "filt", "cut", "cutoff", "res", "q", "drive", "drv",
+    ],
+    targets: VCF_TARGETS,
+    parameters: VCF_PARAMETERS,
+    first_parameter: "cut",
+};
+
+pub const SYM_METADATA: CommandMetadata = CommandMetadata {
+    name: "sym",
+    aliases: &[],
+    targets: SYM_TARGETS,
+    parameters: SYM_PARAMETERS,
+    first_parameter: "decay",
+};
+
+pub fn command_metadata(head: &str) -> Option<&'static CommandMetadata> {
+    let head = head.to_ascii_lowercase();
+    [&VCF_METADATA, &SYM_METADATA]
+        .into_iter()
+        .find(|meta| meta.name == head || meta.aliases.contains(&head.as_str()))
+}
+
+pub fn command_token_name(tokens: &[CommandTokenMetadata], token: &str) -> Option<&'static str> {
+    let token = token.to_ascii_lowercase();
+    tokens
+        .iter()
+        .find(|item| item.name == token || item.aliases.contains(&token.as_str()))
+        .map(|item| item.name)
+}
+
+pub fn command_parameter(
+    meta: &CommandMetadata,
+    token: &str,
+) -> Option<&'static CommandParameterMetadata> {
+    let token = token.to_ascii_lowercase();
+    meta.parameters
+        .iter()
+        .find(|param| param.name == token || param.aliases.contains(&token.as_str()))
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum ValueChange {
     Set(f64),
     Add(f64),
@@ -884,7 +1120,10 @@ fn parse_vcf_change(input: &str) -> Result<VcfChange, String> {
 
     let mut rest: Vec<&str> = toks.collect();
     if rest.is_empty() {
-        return Err(usage.into());
+        return Ok(VcfChange {
+            enabled: Some(true),
+            ..VcfChange::default()
+        });
     }
     if let Some(target) = rest.first().and_then(|tok| VcfTarget::parse(tok)) {
         out.target = Some(target);

@@ -188,6 +188,12 @@ impl App {
         if self.complete_edit_input() {
             return;
         }
+        if self.complete_metadata_command_input() {
+            return;
+        }
+        if self.complete_phrase_input() {
+            return;
+        }
         let Some((cmd, arg_start, partial)) = completion_target(&self.input) else {
             return;
         };
@@ -240,6 +246,32 @@ impl App {
             return true;
         };
         self.input = format!("edit {id_token} {}", phrase.display_src());
+        self.cursor_pos = self.input.chars().count();
+        self.message = None;
+        true
+    }
+
+    fn complete_metadata_command_input(&mut self) -> bool {
+        let Some((body_start, body)) = command_body_for_completion(&self.input) else {
+            return false;
+        };
+        let Some(completion) = metadata_command_completion(body) else {
+            return false;
+        };
+        if let Some(replacement) = completion.replacement {
+            self.input
+                .replace_range(body_start..self.input.len(), &replacement);
+            self.cursor_pos = self.input.chars().count();
+        }
+        self.message = completion.message;
+        true
+    }
+
+    fn complete_phrase_input(&mut self) -> bool {
+        let Some(replacement) = phrase_completion(&self.input, &self.phrases) else {
+            return false;
+        };
+        self.input = replacement;
         self.cursor_pos = self.input.chars().count();
         self.message = None;
         true
@@ -1964,6 +1996,396 @@ fn completion_target(input: &str) -> Option<(&str, usize, String)> {
     Some((cmd, arg_start.max(rest_start), arg.to_string()))
 }
 
+fn phrase_completion(input: &str, phrases: &[Phrase]) -> Option<String> {
+    let trimmed = input.trim_start();
+    let leading_ws = input.len().saturating_sub(trimmed.len());
+    let words = words_with_spans(trimmed);
+    if words.len() != 1 {
+        return None;
+    }
+    let root_token = words[0].2;
+    let typed_root = crate::tuning::Pitch::parse(root_token)?;
+    let current = phrases
+        .iter()
+        .rev()
+        .find(|phrase| phrase.jump.is_none() && phrase.control.is_none())?;
+    let maqam = phrase_completion_maqam(current, typed_root)?;
+    let rhythm = phrase_rhythm_token(current)?;
+    let mut completion = format!(
+        "{}{} {} {}",
+        " ".repeat(leading_ws),
+        root_token,
+        maqam,
+        rhythm
+    );
+    if current.repeat > 1 {
+        completion.push_str(&format!(" r{}", current.repeat));
+    }
+    Some(completion)
+}
+
+fn phrase_rhythm_token(phrase: &Phrase) -> Option<&str> {
+    phrase
+        .src
+        .split_whitespace()
+        .rev()
+        .find(|token| token.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn phrase_completion_maqam(
+    current: &Phrase,
+    typed_root: crate::tuning::Pitch,
+) -> Option<&'static str> {
+    let current_name = current.bar.maqam.name();
+    let shift = pitch_class_delta(current.bar.root, typed_root);
+    match (current_name, shift) {
+        ("Bayati", 10) => Some("rast"),
+        ("Minor" | "Aeolian", 3) => Some("major"),
+        _ => None,
+    }
+}
+
+fn pitch_class_delta(from: crate::tuning::Pitch, to: crate::tuning::Pitch) -> i8 {
+    (pitch_class(to) - pitch_class(from)).rem_euclid(12)
+}
+
+fn pitch_class(pitch: crate::tuning::Pitch) -> i8 {
+    let natural = match pitch.letter.to_ascii_lowercase() {
+        'c' => 0,
+        'd' => 2,
+        'e' => 4,
+        'f' => 5,
+        'g' => 7,
+        'a' => 9,
+        'b' => 11,
+        _ => 0,
+    };
+    (natural + pitch.accidental).rem_euclid(12)
+}
+
+struct MetadataCompletion {
+    replacement: Option<String>,
+    message: Option<String>,
+}
+
+fn command_body_for_completion(input: &str) -> Option<(usize, &str)> {
+    let trimmed = input.trim_start();
+    let leading_ws = input.len().saturating_sub(trimmed.len());
+    let words = words_with_spans(trimmed);
+    let first = words.first()?;
+    let first_text = first.2;
+    let first_alpha: String = first_text
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphabetic())
+        .collect();
+    let first_digits: String = first_text
+        .chars()
+        .skip_while(|ch| ch.is_ascii_alphabetic())
+        .collect();
+    let first_lower = first_alpha.to_ascii_lowercase();
+
+    if first_lower == "edit" {
+        let id = words.get(1)?;
+        let body_start = words
+            .get(2)
+            .map(|word| word.0)
+            .unwrap_or_else(|| trimmed.len());
+        if id.2.parse::<isize>().is_err() {
+            return None;
+        }
+        return Some((leading_ws + body_start, &trimmed[body_start..]));
+    }
+
+    if first_lower == "i" {
+        if !first_digits.is_empty() {
+            let body_start = words
+                .get(1)
+                .map(|word| word.0)
+                .unwrap_or_else(|| trimmed.len());
+            return Some((leading_ws + body_start, &trimmed[body_start..]));
+        }
+        let id = words.get(1)?;
+        let body_start = words
+            .get(2)
+            .map(|word| word.0)
+            .unwrap_or_else(|| trimmed.len());
+        if id.2.parse::<isize>().is_err() {
+            return None;
+        }
+        return Some((leading_ws + body_start, &trimmed[body_start..]));
+    }
+
+    Some((leading_ws, trimmed))
+}
+
+fn words_with_spans(input: &str) -> Vec<(usize, usize, &str)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (idx, ch) in input.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(word_start) = start.take() {
+                out.push((word_start, idx, &input[word_start..idx]));
+            }
+        } else if start.is_none() {
+            start = Some(idx);
+        }
+    }
+    if let Some(word_start) = start {
+        out.push((word_start, input.len(), &input[word_start..]));
+    }
+    out
+}
+
+fn metadata_command_completion(body: &str) -> Option<MetadataCompletion> {
+    let body_leading_ws = body.len().saturating_sub(body.trim_start().len());
+    let body_trimmed = body.trim_start();
+    if body_trimmed.is_empty() {
+        return None;
+    }
+    let mut tokens: Vec<&str> = body_trimmed.split_whitespace().collect();
+    let head = tokens.first().copied()?;
+    let meta = command::command_metadata(head)?;
+    let trailing_space = body_trimmed.chars().last().is_some_and(char::is_whitespace);
+
+    if tokens.len() == 1 && !trailing_space {
+        tokens.push("");
+    } else if trailing_space {
+        tokens.push("");
+    }
+
+    let current = tokens.last().copied().unwrap_or("");
+    let before_current = &tokens[..tokens.len().saturating_sub(1)];
+    if let Some(mut completion) = metadata_value_completion(meta, before_current, current) {
+        if let Some(replacement) = completion.replacement {
+            completion.replacement =
+                Some(format!("{}{}", " ".repeat(body_leading_ws), replacement));
+        }
+        return Some(completion);
+    }
+    let replacement = metadata_command_replacement(meta, before_current, current)?;
+    let replacement = format!("{}{}", " ".repeat(body_leading_ws), replacement);
+    Some(MetadataCompletion {
+        replacement: Some(replacement),
+        message: None,
+    })
+}
+
+fn metadata_command_replacement(
+    meta: &'static command::CommandMetadata,
+    before_current: &[&str],
+    current: &str,
+) -> Option<String> {
+    let head = before_current.first().copied()?;
+    let mut body = vec![meta.name.to_string()];
+    let mut idx = 1usize;
+    if let Some(target) = before_current.get(idx).and_then(|token| {
+        command::command_token_name(meta.targets, canonical_completion_key(token))
+    }) {
+        body.push(target.to_string());
+        idx += 1;
+    }
+
+    let current_key = canonical_completion_key(current);
+    if idx == 1 && before_current.len() == 1 {
+        if let Some(target) = exact_completion_target(meta, current_key) {
+            body.push(target.to_string());
+            body.push(meta.first_parameter.to_string());
+            return Some(format!("{} ", body.join(" ")));
+        }
+        if current_key.is_empty() {
+            body.push(meta.first_parameter.to_string());
+            return Some(format!("{} ", body.join(" ")));
+        }
+        if let Some(token) = first_matching_completion_token(meta, current_key) {
+            body.push(token.to_string());
+            if exact_completion_target(meta, token).is_some() {
+                body.push(meta.first_parameter.to_string());
+            }
+            return Some(format!("{} ", body.join(" ")));
+        }
+        return None;
+    }
+
+    let mut used = Vec::new();
+    let mut scan = idx;
+    while scan < before_current.len() {
+        let token = before_current[scan];
+        let key = canonical_completion_key(token);
+        if let Some(param) = command::command_parameter(meta, key) {
+            body.push(param.name.to_string());
+            used.push(param.name);
+            if token.contains('=') {
+                scan += 1;
+            } else {
+                if let Some(value) = before_current.get(scan + 1) {
+                    if command::command_parameter(meta, canonical_completion_key(value)).is_none()
+                        && command::command_token_name(
+                            meta.targets,
+                            canonical_completion_key(value),
+                        )
+                        .is_none()
+                    {
+                        body.push((*value).to_string());
+                        scan += 1;
+                    }
+                }
+                scan += 1;
+            }
+        } else {
+            body.push(token.to_string());
+            scan += 1;
+        }
+    }
+
+    if let Some(param) = command::command_parameter(meta, current_key) {
+        body.push(param.name.to_string());
+        return Some(format!("{} ", body.join(" ")));
+    }
+    if let Some(param) = first_matching_completion_parameter(meta, current_key, &used) {
+        body.push(param.name.to_string());
+        return Some(format!("{} ", body.join(" ")));
+    }
+    if current_key.is_empty() {
+        if let Some(param) = meta
+            .parameters
+            .iter()
+            .find(|param| !used.contains(&param.name) && param_expects_value(param))
+        {
+            body.push(param.name.to_string());
+            return Some(format!("{} ", body.join(" ")));
+        }
+    }
+
+    if head != meta.name {
+        Some(body.join(" "))
+    } else {
+        None
+    }
+}
+
+fn metadata_value_completion(
+    meta: &'static command::CommandMetadata,
+    before_current: &[&str],
+    current: &str,
+) -> Option<MetadataCompletion> {
+    if before_current.len() == 2
+        && command::command_token_name(meta.targets, canonical_completion_key(before_current[1]))
+            .is_some()
+    {
+        return None;
+    }
+    let param = before_current
+        .last()
+        .and_then(|token| command::command_parameter(meta, canonical_completion_key(token)))?;
+    if !param_expects_value(param) {
+        return None;
+    }
+    if param.values.is_empty() {
+        return Some(MetadataCompletion {
+            replacement: None,
+            message: Some(format!(
+                "{} {} {}",
+                meta.name,
+                param.name,
+                parameter_value_hint(param)
+            )),
+        });
+    }
+    let value = param
+        .values
+        .iter()
+        .find(|value| value.starts_with(current))
+        .copied()?;
+    let mut body: Vec<String> = before_current
+        .iter()
+        .map(|token| (*token).to_string())
+        .collect();
+    body[0] = meta.name.to_string();
+    body.push(value.to_string());
+    Some(MetadataCompletion {
+        replacement: Some(format!("{} ", body.join(" "))),
+        message: None,
+    })
+}
+
+fn param_expects_value(param: &command::CommandParameterMetadata) -> bool {
+    !param.values.is_empty()
+        || param.lower.is_some()
+        || param.upper.is_some()
+        || !param.units.is_empty()
+}
+
+fn parameter_value_hint(param: &command::CommandParameterMetadata) -> String {
+    if !param.values.is_empty() {
+        return format!("<{}>", param.values.join("|"));
+    }
+    let range = match (param.lower, param.upper) {
+        (Some(lower), Some(upper)) => format!("{}..{}", compact_float(lower), compact_float(upper)),
+        (Some(lower), None) => format!(">= {}", compact_float(lower)),
+        (None, Some(upper)) => format!("<= {}", compact_float(upper)),
+        (None, None) => "value".to_string(),
+    };
+    let units = if param.units.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", param.units)
+    };
+    format!("<{range}{units}|+n|-n|+nt>")
+}
+
+fn compact_float(value: f64) -> String {
+    let mut out = format!("{value:.5}");
+    while out.contains('.') && out.ends_with('0') {
+        out.pop();
+    }
+    if out.ends_with('.') {
+        out.pop();
+    }
+    out
+}
+
+fn canonical_completion_key(token: &str) -> &str {
+    token.split_once('=').map(|(key, _)| key).unwrap_or(token)
+}
+
+fn exact_completion_target(
+    meta: &'static command::CommandMetadata,
+    token: &str,
+) -> Option<&'static str> {
+    if token.is_empty() {
+        return None;
+    }
+    command::command_token_name(meta.targets, token)
+}
+
+fn first_matching_completion_token(
+    meta: &'static command::CommandMetadata,
+    partial: &str,
+) -> Option<&'static str> {
+    meta.targets
+        .iter()
+        .find(|target| completion_token_matches(target.name, target.aliases, partial))
+        .map(|target| target.name)
+        .or_else(|| first_matching_completion_parameter(meta, partial, &[]).map(|p| p.name))
+}
+
+fn first_matching_completion_parameter(
+    meta: &'static command::CommandMetadata,
+    partial: &str,
+    used: &[&str],
+) -> Option<&'static command::CommandParameterMetadata> {
+    meta.parameters.iter().find(|param| {
+        !used.contains(&param.name)
+            && param_expects_value(param)
+            && completion_token_matches(param.name, param.aliases, partial)
+    })
+}
+
+fn completion_token_matches(name: &str, aliases: &[&str], partial: &str) -> bool {
+    !partial.is_empty()
+        && (name.starts_with(partial) || aliases.iter().any(|alias| alias.starts_with(partial)))
+}
+
 fn mq_matches(cmd: &str, partial: &str) -> Vec<String> {
     let partial_path = Path::new(partial);
     let (dir, prefix) = match partial_path.parent() {
@@ -2573,6 +2995,11 @@ mod tests {
         let (tx, _rx) = bounded(16);
         let mut app = App::new(tx);
 
+        app.handle_command("vcf");
+        assert!(app.vcf.all.enabled);
+        assert_eq!(app.vcf.all.target, VcfTarget::All);
+        assert_eq!(app.phrases.last().unwrap().src, "vcf");
+
         app.handle_command("vcf off");
         assert!(!app.vcf.all.enabled);
         assert!(!app.vcf.mic.enabled);
@@ -2799,6 +3226,66 @@ mod tests {
         app.complete_input();
         assert_eq!(app.input, "edit 1 vcf bass cut 900 res 0.65");
         assert!(app.message.is_none());
+    }
+
+    #[test]
+    fn command_metadata_drives_parameter_completion() {
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+
+        app.input = "vcf".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "vcf cut ");
+        assert!(app.message.is_none());
+
+        app.input = "vcf mic ".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "vcf mic cut ");
+
+        app.input = "vcf mic cut ".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "vcf mic cut ");
+        assert_eq!(
+            app.message.as_deref(),
+            Some("vcf cut <10..22000 Hz|+n|-n|+nt>")
+        );
+
+        app.input = "vcf bass wave s".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "vcf bass wave sin ");
+        assert!(app.message.is_none());
+
+        app.input = "i 4 vcf bass ".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "i 4 vcf bass cut ");
+
+        app.input = "edit 4 sym mic ".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "edit 4 sym mic decay ");
+    }
+
+    #[test]
+    fn phrase_completion_uses_current_phrase_transition_rules() {
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+
+        app.handle_command("d bayati 4444");
+        app.input = "c ".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "c rast 4444");
+
+        app.handle_command("e minor 332 r2");
+        app.input = "g ".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "g major 332 r2");
     }
 
     #[test]
