@@ -214,8 +214,8 @@ fn build_carpet_tick_highlights(
     // Base score cells are neutral. Dynamic phrase state is layered over them
     // below: next phrase first, then the current subdivision.
     for tick in &layout {
-        let outer = if tick.is_kick { 18 } else { 13 };
-        let inner = if tick.is_kick { 9 } else { 7 };
+        let outer = if tick.is_kick { 6 } else { 4 };
+        let inner = if tick.is_kick { 3 } else { 2 };
         let xo = tick.x.round() as i32 - outer / 2;
         let yo = tick.y.round() as i32 - outer / 2;
         let xi = tick.x.round() as i32 - inner / 2;
@@ -243,8 +243,8 @@ fn build_carpet_tick_highlights(
         if let Some(next_phrase_idx) = next_phrase_idx {
             let next_id = phrases[next_phrase_idx].id;
             for tick in layout.iter().filter(|tick| tick.phrase_id == next_id) {
-                let outer = if tick.is_kick { 18 } else { 13 };
-                let inner = if tick.is_kick { 9 } else { 7 };
+                let outer = if tick.is_kick { 6 } else { 4 };
+                let inner = if tick.is_kick { 3 } else { 2 };
                 let xo = tick.x.round() as i32 - outer / 2;
                 let yo = tick.y.round() as i32 - outer / 2;
                 let xi = tick.x.round() as i32 - inner / 2;
@@ -267,8 +267,8 @@ fn build_carpet_tick_highlights(
             };
             let start = sample as f64 / SR + subdivision as f64 * subdiv_secs;
             let end = start + subdiv_secs - 0.0001;
-            let outer = if layout.is_kick { 18 } else { 13 };
-            let inner = if layout.is_kick { 9 } else { 7 };
+            let outer = if layout.is_kick { 6 } else { 4 };
+            let inner = if layout.is_kick { 3 } else { 2 };
             let xo = layout.x.round() as i32 - outer / 2;
             let yo = layout.y.round() as i32 - outer / 2;
             let xi = layout.x.round() as i32 - inner / 2;

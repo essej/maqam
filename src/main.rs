@@ -70,7 +70,17 @@ fn cli_commands(args: &[String]) -> Vec<String> {
 
 fn run_cli(commands: Vec<String>) -> anyhow::Result<()> {
     let (tx, rx) = bounded::<sequencer::AudioCmd>(512);
-    let _stream = audio::start_audio(rx)?;
+    let rx_guard = rx.clone();
+    let _stream = match audio::start_audio(rx) {
+        Ok(stream) => Some(stream),
+        Err(err) => {
+            eprintln!(
+                "audio output unavailable ({err}); continuing command mode without live playback"
+            );
+            eprintln!("to hear live playback, run maqam-live in an environment with an audio device");
+            None
+        }
+    };
     let mut app = app::App::new(tx);
 
     for cmd in &commands {
@@ -94,6 +104,8 @@ fn run_cli(commands: Vec<String>) -> anyhow::Result<()> {
     } else if let Some(msg) = &app.message {
         println!("{msg}");
     }
+
+    drop(rx_guard);
 
     Ok(())
 }

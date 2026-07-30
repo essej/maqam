@@ -971,7 +971,7 @@ fn draw_ring_score(buf: &mut [u8], w: usize, score: &WeaveScore) {
             w,
             tick.x.round() as i32,
             tick.y.round() as i32,
-            if tick.is_kick { 12 } else { 7 },
+            if tick.is_kick { 4 } else { 3 },
             [6, 4, 3],
             0.96,
         );
@@ -980,7 +980,7 @@ fn draw_ring_score(buf: &mut [u8], w: usize, score: &WeaveScore) {
             w,
             tick.x.round() as i32,
             tick.y.round() as i32,
-            if tick.is_kick { 8 } else { 5 },
+            if tick.is_kick { 3 } else { 2 },
             c,
             0.90,
         );
