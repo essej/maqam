@@ -312,10 +312,6 @@ impl App {
             self.message = Some(format!("✗ no phrase id {id_ref}"));
             return;
         };
-        if self.is_playing_phrase_id(id) {
-            self.message = Some(format!("✗ phrase {id} is playing — cannot edit"));
-            return;
-        }
         let Some(pos) = self.phrases.iter().position(|phrase| phrase.id == id) else {
             self.message = Some(format!("✗ no phrase id {id}"));
             return;
@@ -324,14 +320,6 @@ impl App {
         self.phrases[pos] = entry.clone();
         let _ = self.audio_tx.send(AudioCmd::ReplacePhrase(entry));
         self.message = Some(format!("edited {id} → sym"));
-    }
-
-    fn is_playing_phrase_id(&self, id: usize) -> bool {
-        if self.paused {
-            return false;
-        }
-        let cur_pos = crate::CUR_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
-        self.phrases.get(cur_pos).map(|p| p.id) == Some(id)
     }
 
     fn sequence_start_settings(&self) -> (f64, f64, VcfBank, FxSettings) {
@@ -1008,10 +996,6 @@ impl App {
                     self.message = Some(format!("✗ no phrase id {to}"));
                     return;
                 }
-                if self.is_playing_phrase_id(id) {
-                    self.message = Some(format!("✗ phrase {id} is playing — cannot edit"));
-                    return;
-                }
                 let pos = match self.phrases.iter().position(|p| p.id == id) {
                     Some(p) => p,
                     None => {
@@ -1036,10 +1020,6 @@ impl App {
                     self.message = Some(format!("✗ no phrase id {id}"));
                     return;
                 };
-                if self.is_playing_phrase_id(id) {
-                    self.message = Some(format!("✗ phrase {id} is playing — cannot edit"));
-                    return;
-                }
                 let pos = match self.phrases.iter().position(|p| p.id == id) {
                     Some(p) => p,
                     None => {
@@ -1078,10 +1058,6 @@ impl App {
                     self.message = Some(format!("✗ no phrase id {id}"));
                     return;
                 };
-                if self.is_playing_phrase_id(id) {
-                    self.message = Some(format!("✗ phrase {id} is playing — cannot edit"));
-                    return;
-                }
                 let pos = match self.phrases.iter().position(|p| p.id == id) {
                     Some(p) => p,
                     None => {
@@ -1107,10 +1083,6 @@ impl App {
                     self.message = Some(format!("✗ no phrase id {id}"));
                     return;
                 };
-                if self.is_playing_phrase_id(id) {
-                    self.message = Some(format!("✗ phrase {id} is playing — cannot edit"));
-                    return;
-                }
                 let pos = match self.phrases.iter().position(|p| p.id == id) {
                     Some(p) => p,
                     None => {
@@ -1137,10 +1109,6 @@ impl App {
                     self.message = Some(format!("✗ no phrase id {id}"));
                     return;
                 };
-                if self.is_playing_phrase_id(id) {
-                    self.message = Some(format!("✗ phrase {id} is playing — cannot edit"));
-                    return;
-                }
                 let pos = match self.phrases.iter().position(|p| p.id == id) {
                     Some(p) => p,
                     None => {
@@ -1167,10 +1135,6 @@ impl App {
                     self.message = Some(format!("✗ no phrase id {id}"));
                     return;
                 };
-                if self.is_playing_phrase_id(id) {
-                    self.message = Some(format!("✗ phrase {id} is playing — cannot edit"));
-                    return;
-                }
                 let pos = match self.phrases.iter().position(|p| p.id == id) {
                     Some(p) => p,
                     None => {

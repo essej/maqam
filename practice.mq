@@ -1,5 +1,8 @@
 MAQAM_SESSION_V3
 vol 0.8
 B|4|120
+V|7|vcf kanun cut 300 res 0.9 drive 1 wave saw
+V|8|vcf bass cut 50 res 0.9 drive 2 wave saw
 Y|1|sym on decay 0.9999 drive 2
 P|0|1|d bayati, a bayati 4444
+P|6|1|a bayati, e bayati 332332

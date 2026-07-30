@@ -23,7 +23,8 @@ const DIM: Color = Color::Rgb(0, 180, 0);
 const CMD: Color = Color::Rgb(0, 255, 0);
 const ERR: Color = Color::Rgb(255, 80, 80);
 const CURRENT_GREEN: Color = Color::Rgb(80, 255, 120);
-const NEXT_BLUE: Color = Color::Rgb(128, 128, 255);
+const NEXT_DIFFERENT_BLUE: Color = Color::Rgb(95, 125, 230);
+const NEXT_BLUE: Color = Color::Rgb(70, 150, 255);
 const INACTIVE_GRAY: Color = Color::Rgb(128, 128, 128);
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
@@ -180,6 +181,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let cur = crate::CUR_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
     let cur_sub = crate::CUR_SUBDIV.load(std::sync::atomic::Ordering::Relaxed);
     let cur_plays = crate::CUR_PLAYS.load(std::sync::atomic::Ordering::Relaxed);
+    let next = crate::NEXT_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
     let exit = crate::EXIT_PHRASE.load(std::sync::atomic::Ordering::Relaxed);
     let n = app.phrases.len().max(1);
     let current_is_last_repeat = app
@@ -242,11 +244,14 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .enumerate()
         .map(|(idx, phrase)| {
             let playing = idx == cur % n;
-            let is_next = show_prediction && !playing && idx == exit;
+            let is_up_next = show_prediction && !playing && idx == next;
+            let is_next_different = show_prediction && !playing && idx == exit;
             let state_color = if playing {
                 CURRENT_GREEN
-            } else if is_next {
+            } else if is_up_next {
                 NEXT_BLUE
+            } else if is_next_different {
+                NEXT_DIFFERENT_BLUE
             } else {
                 INACTIVE_GRAY
             };
@@ -273,7 +278,11 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             } else {
                                 "└──>"
                             },
-                            if will_jump { NEXT_BLUE } else { INACTIVE_GRAY },
+                            if will_jump {
+                                NEXT_DIFFERENT_BLUE
+                            } else {
+                                INACTIVE_GRAY
+                            },
                         )
                     } else if idx == source && will_jump && leaves_current_phrase {
                         ("●   ", NEXT_BLUE)
@@ -286,11 +295,13 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             let id_str = format!("{:>2}: ", phrase.id);
             let marker = if playing {
                 "▶ "
-            } else if is_next {
+            } else if is_up_next {
+                "▸ "
+            } else if is_next_different {
                 if current_is_last_repeat {
-                    "▸ "
-                } else {
                     "▷ "
+                } else {
+                    "◇ "
                 }
             } else {
                 "  "

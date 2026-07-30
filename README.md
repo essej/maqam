@@ -149,8 +149,6 @@ edit 1 j 0 6
 x 3
 ```
 
-`edit` is blocked for the currently playing phrase.
-
 ### Playback
 
 ```text
