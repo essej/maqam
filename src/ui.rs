@@ -26,6 +26,7 @@ const CURRENT_GREEN: Color = Color::Rgb(80, 255, 120);
 const NEXT_DIFFERENT_BLUE: Color = Color::Rgb(95, 125, 230);
 const NEXT_BLUE: Color = Color::Rgb(70, 150, 255);
 const INACTIVE_GRAY: Color = Color::Rgb(128, 128, 128);
+const ROW_GUARD: Color = Color::Rgb(0, 0, 0);
 
 pub fn run(app: &mut App) -> anyhow::Result<()> {
     enable_raw_mode()?;
@@ -331,7 +332,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     "  [missing target]"
                 };
                 let mut spans = vec![
-                    Span::styled("•", Style::default().fg(INACTIVE_GRAY).bg(BG)),
+                    Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
                     Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
                     Span::styled(
                         marker,
@@ -376,7 +377,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     "[settings]"
                 };
                 let mut spans = vec![
-                    Span::styled("•", Style::default().fg(INACTIVE_GRAY).bg(BG)),
+                    Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
                     Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
                     Span::styled(
                         marker,
@@ -414,7 +415,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             };
 
             let mut spans = vec![
-                Span::styled("•", Style::default().fg(INACTIVE_GRAY).bg(BG)),
+                Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
                 Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
                 Span::styled(
                     marker,
