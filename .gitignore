@@ -1,4 +1,3 @@
 /target
 .globals.ml
 *.mp4
-!maqam-demo.mp4
