@@ -307,7 +307,8 @@ The loader accepts V3 plus older V1/V2 session formats.
 
 Tab completion works for `save` and `load` paths. For `load`, completion looks
 for `.mq` files recursively when the partial path has no slash, lists ambiguous
-matches, and completes a unique match or common prefix.
+matches, and completes a unique match or common prefix. Pressing Tab after
+`edit <id>` fills in that entry's current command text.
 
 ### Recording
 

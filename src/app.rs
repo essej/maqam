@@ -185,6 +185,9 @@ impl App {
     }
 
     pub fn complete_input(&mut self) {
+        if self.complete_edit_input() {
+            return;
+        }
         let Some((cmd, arg_start, partial)) = completion_target(&self.input) else {
             return;
         };
@@ -211,6 +214,35 @@ impl App {
         if matches.len() == 1 {
             self.message = None;
         }
+    }
+
+    fn complete_edit_input(&mut self) -> bool {
+        let trimmed = self.input.trim();
+        let mut tokens = trimmed.split_whitespace();
+        if tokens.next() != Some("edit") {
+            return false;
+        }
+        let Some(id_token) = tokens.next() else {
+            return false;
+        };
+        if tokens.next().is_some() {
+            return false;
+        }
+        let Ok(id_ref) = id_token.parse::<isize>() else {
+            return false;
+        };
+        let Some(id) = self.resolve_id_ref(id_ref) else {
+            self.message = Some(format!("✗ no phrase id {id_ref}"));
+            return true;
+        };
+        let Some(phrase) = self.phrases.iter().find(|phrase| phrase.id == id) else {
+            self.message = Some(format!("✗ no phrase id {id}"));
+            return true;
+        };
+        self.input = format!("edit {id_token} {}", phrase.display_src());
+        self.cursor_pos = self.input.chars().count();
+        self.message = None;
+        true
     }
 
     pub fn overlay_scroll_up(&mut self) {
@@ -2731,6 +2763,26 @@ mod tests {
         app.cursor_pos = app.input.chars().count();
         app.complete_input();
         assert_eq!(app.input, "load sets/alphaDeep.mq");
+        assert!(app.message.is_none());
+    }
+
+    #[test]
+    fn edit_tab_completion_fills_current_timeline_value() {
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+
+        app.handle_command("d bayati 332 r3");
+        app.input = "edit 0".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "edit 0 d bayati 332 r3");
+        assert!(app.message.is_none());
+
+        app.handle_command("vcf bass cut=900 res=0.65");
+        app.input = "edit 1 ".to_string();
+        app.cursor_pos = app.input.chars().count();
+        app.complete_input();
+        assert_eq!(app.input, "edit 1 vcf bass cut 900 res 0.65");
         assert!(app.message.is_none());
     }
 
