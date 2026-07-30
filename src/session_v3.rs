@@ -14,7 +14,7 @@ fn escape_field(s: &str) -> String {
         .replace('\n', "\\n")
 }
 
-pub fn serialize_session_v3(phrases: &[Phrase], vol: f32) -> String {
+pub fn serialize_session_v3(phrases: &[Phrase]) -> String {
     let mut out = String::new();
     out.push_str(HEADER);
     out.push('\n');
@@ -27,8 +27,6 @@ pub fn serialize_session_v3(phrases: &[Phrase], vol: f32) -> String {
             .join(" ");
         out.push_str(&format!("create {name} {ratios_s}\n"));
     }
-
-    out.push_str(&format!("vol {vol}\n"));
 
     for p in phrases {
         if let Some(j) = &p.jump {

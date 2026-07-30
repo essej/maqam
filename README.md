@@ -199,8 +199,8 @@ s *0.8
 vol 0.8
 ```
 
-`vol` is saved in sessions, but unlike `bpm` and `s`, it is not a timeline
-entry.
+`vol` is a live-only setting. It is not saved in sessions and legacy `vol`
+lines are ignored when loading.
 
 ### VCF And VCO
 
@@ -299,7 +299,6 @@ V|id|vcf command
 F|id|fx command
 Y|id|sym command
 T|id|stop
-vol <n>
 create <Name> <ratio> ...
 ```
 

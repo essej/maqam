@@ -229,7 +229,8 @@ F|id|fx command
 ```
 
 Fields are escaped for `|`, backslash, and newline. Custom jins are written as
-plain `create` lines before the timeline, and volume is written as `vol <n>`.
+plain `create` lines before the timeline. Live-only state such as volume is not
+serialized.
 
 ### `src/record.rs` And `src/record_old.rs`
 
@@ -276,9 +277,10 @@ the main app loop.
 - `MAQAM_SESSION_V2` -> legacy V2 loader
 - `MAQAM_SESSION_V1` -> legacy V1 loader
 
-V3 loading resets custom jins to defaults, applies any `create` lines, loads
-volume, then rebuilds timeline entries. Plain control lines under a V3 header
-are accepted for convenience. Older numeric VCF records are still accepted.
+V3 loading resets custom jins to defaults, applies any `create` lines, then
+rebuilds timeline entries. Plain control lines under a V3 header are accepted
+for convenience. Legacy `vol` lines are accepted but ignored. Older numeric VCF
+records are still accepted.
 
 After loading, the app computes the sequence-start settings by walking leading
 control entries before the first musical phrase, then sends `Clear`,

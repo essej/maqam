@@ -14,7 +14,6 @@ territories:
 
 ```text
 create <name> <ratio>...
-vol <float>
 ```
 
 Timeline records are pipe-delimited and always include an id in field 2.

@@ -1286,7 +1286,7 @@ impl App {
     }
 
     fn save_session(&self, path: &str) -> Result<(), String> {
-        let out = crate::session_v3::serialize_session_v3(&self.phrases, self.vol);
+        let out = crate::session_v3::serialize_session_v3(&self.phrases);
         fs::write(path, out).map_err(|e| e.to_string())
     }
 
@@ -1318,7 +1318,7 @@ impl App {
         let mut new_sustain = 1.25f64;
         let mut new_vcf = VcfBank::default();
         let mut new_fx = FxSettings::default();
-        let mut new_vol = 1.0f32;
+        let new_vol = self.vol;
         let mut loaded: Vec<Phrase> = Vec::new();
         let mut ids = std::collections::HashSet::new();
         let mut max_id = None;
@@ -1340,14 +1340,7 @@ impl App {
                     .map_err(|e| format!("line {line_no}: {e}"))?;
                 continue;
             }
-            if let Some(value) = line.strip_prefix("vol ") {
-                new_vol = value
-                    .trim()
-                    .parse::<f32>()
-                    .map_err(|_| format!("line {line_no}: bad volume"))?;
-                if !(0.0..=2.0).contains(&new_vol) {
-                    return Err(format!("line {line_no}: volume out of range"));
-                }
+            if line.starts_with("vol ") {
                 continue;
             }
             if is_plain_control_line(line) {
@@ -1646,7 +1639,7 @@ impl App {
         let mut new_sustain = self.sustain;
         let mut new_vcf = self.vcf;
         let mut new_fx = self.fx;
-        let mut new_vol = self.vol;
+        let new_vol = self.vol;
         let mut loaded: Vec<Phrase> = Vec::new();
         let mut max_id = 0usize;
         let mut last_rhythm = vec![3, 3, 2];
@@ -1730,14 +1723,7 @@ impl App {
                 max_id += 1;
                 continue;
             }
-            if let Some(v) = line.strip_prefix("vol ") {
-                new_vol = v
-                    .trim()
-                    .parse::<f32>()
-                    .map_err(|_| format!("line {line_no}: bad volume"))?;
-                if !(0.0..=2.0).contains(&new_vol) {
-                    return Err(format!("line {line_no}: volume out of range"));
-                }
+            if line.starts_with("vol ") {
                 continue;
             }
 
@@ -1837,7 +1823,7 @@ impl App {
         let mut new_sustain = 1.25f64;
         let mut new_vcf = VcfBank::default();
         let mut new_fx = FxSettings::default();
-        let mut new_vol = 1.0f32;
+        let new_vol = self.vol;
         let mut loaded: Vec<Phrase> = Vec::new();
         let mut next_id = 0usize;
         let mut last_rhythm = vec![3, 3, 2];
@@ -1895,9 +1881,7 @@ impl App {
                     next_id += 1;
                     loaded.push(entry);
                 }
-                Cmd::SetVol(v) => {
-                    new_vol = v;
-                }
+                Cmd::SetVol(_) => {}
                 Cmd::AddPhrase {
                     source,
                     specs,
@@ -2465,7 +2449,9 @@ mod tests {
 
         let (tx, _rx) = bounded(32);
         let mut app = App::new(tx);
+        app.vol = 0.42;
         app.load_session(input_path.to_str().unwrap()).unwrap();
+        assert_eq!(app.vol, 0.42);
 
         assert_eq!(fs::read_to_string(&input_path).unwrap(), source);
         assert_eq!(
@@ -2494,6 +2480,7 @@ mod tests {
         app.save_session(output_path.to_str().unwrap()).unwrap();
         let saved = fs::read_to_string(&output_path).unwrap();
         assert!(saved.starts_with("MAQAM_SESSION_V3\n"));
+        assert!(!saved.contains("\nvol "));
         assert!(saved.contains("B|4|180\n"));
         assert!(saved.contains("Y|8|sym on\n"));
         assert!(saved.contains("Y|9|sym gain 64\n"));
