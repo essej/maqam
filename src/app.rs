@@ -86,6 +86,14 @@ impl App {
         self.history.last().map(|s| s.as_str())
     }
 
+    pub fn session_filename(&self) -> Option<&str> {
+        self.session_path.as_deref().and_then(|path| {
+            Path::new(path)
+                .file_name()
+                .and_then(|filename| filename.to_str())
+        })
+    }
+
     pub fn history_up(&mut self) {
         if self.history.is_empty() {
             return;

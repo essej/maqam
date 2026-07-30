@@ -458,11 +458,15 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         })
         .collect();
 
+    let title = match app.session_filename() {
+        Some(filename) => format!(" maqam-live {filename} "),
+        None => " maqam-live ".to_string(),
+    };
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
             .title(Span::styled(
-                " maqam-live ",
+                title,
                 Style::default()
                     .fg(ACCENT)
                     .bg(BG)
