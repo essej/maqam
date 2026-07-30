@@ -47,6 +47,7 @@ chatgpt: what are the valid values for sym decay?
 chatgpt: how do i set a vcf filter on the instrument only?
 claude: how do i get sympathetics?
 claude: what should i type to turn off the bass vcf?
+chatgpt: let's do an e minor that does a d major hemiola turnaround
 ```
 
 `chatgpt:` requires `OPENAI_API_KEY` in the environment. `claude:` requires
@@ -62,6 +63,11 @@ Use sym decay with a value from 0.9 to 0.99999, like sym decay 0.999.
 
 If the API key is missing, maqam-live tells you exactly which environment
 variable to set before trying again.
+
+LLM edits must begin with `chatgpt:` or `claude:`. When the prompt is an edit
+request, maqam-live uses tool calling to get a structured command list, checks
+every command, then applies them. The model is never allowed to run `save`;
+save explicitly when you are happy with the result.
 
 ## Concepts
 
