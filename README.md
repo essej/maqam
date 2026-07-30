@@ -12,6 +12,15 @@ The screenshot is a visual target for generated score backgrounds. At runtime,
 recording generates a background from the current session and overlays the
 terminal HUD.
 
+## Demo
+
+<blockquote class="twitter-tweet">
+  <a href="https://x.com/rrr00bb/status/2082883251006316928">maqam-live video demo</a>
+</blockquote>
+<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+
+Video: <https://x.com/rrr00bb/status/2082883251006316928>
+
 ## Build
 
 Prerequisites:

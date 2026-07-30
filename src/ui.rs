@@ -292,7 +292,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Span::styled(glyph, Style::default().fg(color).bg(BG))
                 })
                 .collect();
-            let id_str = format!("{:>2}: ", phrase.id);
+            let id_str = format!("{:>3}: ", phrase.id);
             let marker = if playing {
                 "▶ "
             } else if is_up_next {
@@ -304,7 +304,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     "◇ "
                 }
             } else {
-                "  "
+                "· "
             };
             // Jump entries — show live counter for every jump, not just the playing one
             if let Some(ref js) = phrase.jump {
@@ -331,6 +331,8 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     "  [missing target]"
                 };
                 let mut spans = vec![
+                    Span::styled("•", Style::default().fg(INACTIVE_GRAY).bg(BG)),
+                    Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
                     Span::styled(
                         marker,
                         Style::default()
@@ -338,7 +340,6 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             .bg(BG)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
                 ];
                 spans.extend(jump_prefix.clone());
                 spans.extend(vec![
@@ -375,6 +376,8 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     "[settings]"
                 };
                 let mut spans = vec![
+                    Span::styled("•", Style::default().fg(INACTIVE_GRAY).bg(BG)),
+                    Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
                     Span::styled(
                         marker,
                         Style::default()
@@ -382,7 +385,6 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             .bg(BG)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
                 ];
                 spans.extend(jump_prefix.clone());
                 spans.extend(vec![
@@ -412,6 +414,8 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             };
 
             let mut spans = vec![
+                Span::styled("•", Style::default().fg(INACTIVE_GRAY).bg(BG)),
+                Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
                 Span::styled(
                     marker,
                     Style::default()
@@ -419,7 +423,6 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         .bg(BG)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
             ];
             spans.extend(jump_prefix);
             spans.extend(vec![
