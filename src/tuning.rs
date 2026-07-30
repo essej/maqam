@@ -120,6 +120,55 @@ fn default_registry_map() -> HashMap<String, Vec<(u32, u32)>> {
         "Jiharkah".into(),
         vec![(1, 1), (9, 8), (5, 4), (4, 3), (3, 2)],
     );
+    m.insert(
+        "Major".into(),
+        vec![(1, 1), (9, 8), (5, 4), (4, 3), (3, 2), (5, 3), (15, 8)],
+    );
+    m.insert(
+        "Ionian".into(),
+        vec![(1, 1), (9, 8), (5, 4), (4, 3), (3, 2), (5, 3), (15, 8)],
+    );
+    m.insert(
+        "Dorian".into(),
+        vec![(1, 1), (9, 8), (6, 5), (4, 3), (3, 2), (5, 3), (9, 5)],
+    );
+    m.insert(
+        "Phrygian".into(),
+        vec![(1, 1), (16, 15), (6, 5), (4, 3), (3, 2), (8, 5), (9, 5)],
+    );
+    m.insert(
+        "Lydian".into(),
+        vec![(1, 1), (9, 8), (5, 4), (45, 32), (3, 2), (5, 3), (15, 8)],
+    );
+    m.insert(
+        "Mixolydian".into(),
+        vec![(1, 1), (9, 8), (5, 4), (4, 3), (3, 2), (5, 3), (9, 5)],
+    );
+    m.insert(
+        "Minor".into(),
+        vec![(1, 1), (9, 8), (6, 5), (4, 3), (3, 2), (8, 5), (9, 5)],
+    );
+    m.insert(
+        "Aeolian".into(),
+        vec![(1, 1), (9, 8), (6, 5), (4, 3), (3, 2), (8, 5), (9, 5)],
+    );
+    m.insert(
+        "Locrian".into(),
+        vec![(1, 1), (16, 15), (6, 5), (4, 3), (64, 45), (8, 5), (9, 5)],
+    );
+    m.insert(
+        "Diminished".into(),
+        vec![
+            (1, 1),
+            (9, 8),
+            (6, 5),
+            (4, 3),
+            (64, 45),
+            (8, 5),
+            (5, 3),
+            (15, 8),
+        ],
+    );
     m
 }
 
@@ -293,6 +342,60 @@ mod tests {
         assert_eq!(
             default_registry_map().get("Zamzam"),
             Some(&vec![(1, 1), (16, 15), (32, 27), (6, 5)])
+        );
+    }
+
+    #[test]
+    fn western_modes_are_builtin_jins() {
+        let defaults = default_registry_map();
+        assert_eq!(
+            defaults.get("Major"),
+            Some(&vec![
+                (1, 1),
+                (9, 8),
+                (5, 4),
+                (4, 3),
+                (3, 2),
+                (5, 3),
+                (15, 8)
+            ])
+        );
+        assert_eq!(
+            defaults.get("Minor"),
+            Some(&vec![
+                (1, 1),
+                (9, 8),
+                (6, 5),
+                (4, 3),
+                (3, 2),
+                (8, 5),
+                (9, 5)
+            ])
+        );
+        assert_eq!(
+            defaults.get("Locrian"),
+            Some(&vec![
+                (1, 1),
+                (16, 15),
+                (6, 5),
+                (4, 3),
+                (64, 45),
+                (8, 5),
+                (9, 5)
+            ])
+        );
+        assert_eq!(
+            defaults.get("Diminished"),
+            Some(&vec![
+                (1, 1),
+                (9, 8),
+                (6, 5),
+                (4, 3),
+                (64, 45),
+                (8, 5),
+                (5, 3),
+                (15, 8)
+            ])
         );
     }
 }

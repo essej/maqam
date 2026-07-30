@@ -374,6 +374,16 @@ clockout <device>      send MIDI clock at current BPM
 | Nikriz | `1/1 256/243 81/64 4/3 3/2` | Hijaz lower |
 | Suznak | `1/1 9/8 27/22 4/3 3/2` | Rast lower |
 | Jiharkah | `1/1 9/8 5/4 4/3 3/2` | Ajam lower |
+| Major | `1/1 9/8 5/4 4/3 3/2 5/3 15/8` | 5-limit Ionian |
+| Ionian | `1/1 9/8 5/4 4/3 3/2 5/3 15/8` | Major alias |
+| Dorian | `1/1 9/8 6/5 4/3 3/2 5/3 9/5` | Minor third, major sixth |
+| Phrygian | `1/1 16/15 6/5 4/3 3/2 8/5 9/5` | Flat second |
+| Lydian | `1/1 9/8 5/4 45/32 3/2 5/3 15/8` | Sharp fourth |
+| Mixolydian | `1/1 9/8 5/4 4/3 3/2 5/3 9/5` | Major third, minor seventh |
+| Minor | `1/1 9/8 6/5 4/3 3/2 8/5 9/5` | 5-limit Aeolian |
+| Aeolian | `1/1 9/8 6/5 4/3 3/2 8/5 9/5` | Natural minor alias |
+| Locrian | `1/1 16/15 6/5 4/3 64/45 8/5 9/5` | Flat fifth |
+| Diminished | `1/1 9/8 6/5 4/3 64/45 8/5 5/3 15/8` | Octatonic whole-half |
 
 ## Example
 

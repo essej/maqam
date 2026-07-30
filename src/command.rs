@@ -720,8 +720,9 @@ fn parse_jins_spec(part: &str) -> Result<JinsSpec, String> {
     let root_tok = toks.next().ok_or("missing pitch")?;
     let root = Pitch::parse(root_tok).ok_or_else(|| format!("unknown pitch '{root_tok}'"))?;
     let maq_tok = toks.next().ok_or("missing maqam")?;
-    let maqam = Maqam::parse(maq_tok)
-        .ok_or_else(|| format!("unknown maqam '{maq_tok}'  (nah bay hij rast kurd saba ajam)"))?;
+    let maqam = Maqam::parse(maq_tok).ok_or_else(|| {
+        format!("unknown maqam '{maq_tok}'  (nah bay hij rast kurd saba ajam major minor modes)")
+    })?;
     let groups = match toks.next() {
         None => None,
         Some(tok) => {

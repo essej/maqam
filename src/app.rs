@@ -2365,6 +2365,34 @@ mod tests {
     }
 
     #[test]
+    fn western_mode_names_parse_as_builtin_jins() {
+        let (tx, _rx) = bounded(8);
+        let mut app = App::new(tx);
+
+        app.handle_command("d major 332");
+        app.handle_command("e dorian 332");
+        app.handle_command("f locrian 332");
+        app.handle_command("g diminished 332");
+
+        assert_eq!(app.phrases[0].bar.maqam_names, vec!["Major"]);
+        assert_eq!(
+            app.phrases[0].bar.ratio_strs[0],
+            "1/1 9/8 5/4 4/3 3/2 5/3 15/8"
+        );
+        assert_eq!(app.phrases[1].bar.maqam_names, vec!["Dorian"]);
+        assert_eq!(app.phrases[2].bar.maqam_names, vec!["Locrian"]);
+        assert_eq!(
+            app.phrases[2].bar.ratio_strs[0],
+            "1/1 16/15 6/5 4/3 64/45 8/5 9/5"
+        );
+        assert_eq!(app.phrases[3].bar.maqam_names, vec!["Diminished"]);
+        assert_eq!(
+            app.phrases[3].bar.ratio_strs[0],
+            "1/1 9/8 6/5 4/3 64/45 8/5 5/3 15/8"
+        );
+    }
+
+    #[test]
     fn inserts_sym_drive_as_a_timeline_control() {
         let (tx, _rx) = bounded(32);
         let mut app = App::new(tx);
