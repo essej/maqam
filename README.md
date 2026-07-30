@@ -14,10 +14,7 @@ terminal HUD.
 
 ## Demo
 
-<blockquote class="twitter-tweet">
-  <a href="https://x.com/rrr00bb/status/2082883251006316928">maqam-live video demo</a>
-</blockquote>
-<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+[![maqam-live video demo](maqam-demo.gif)](https://x.com/rrr00bb/status/2082883251006316928)
 
 Video: <https://x.com/rrr00bb/status/2082883251006316928>
 
