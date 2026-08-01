@@ -1,15 +1,11 @@
 MAQAM_SESSION_V3
 B|1|180
-S|4|2.5
-Y|16|sym on
-Y|17|sym drive 2
-Y|18|sym decay 0.999
-V|14|vcf off
-V|15|vcf kanun cut 22000 res 0.10000000149011612 drive 1 wave tri
+S|4|3
+Y|16|sym on decay 0.999 drive 1
+V|19|vcf kanun cut 2500 res 0.5 drive 0.5
 P|0|2|g bayati, d hijaz 3232
 P|3|1|g bayati, a hijaz 64
 J|5|1|8
-V|13|vcf bass cut 900 res 0.6499999761581421 drive 3.5 wave squ
 P|9|1|d saba 333
 P|10|1|c rast 33
 P|11|1|f hijaz 333

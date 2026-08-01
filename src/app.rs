@@ -3670,6 +3670,15 @@ fn sym_change_src(change: command::SympatheticChange) -> String {
         parts.push("drive".to_string());
         parts.push(format!("{gain}"));
     }
+    if let Some(ratio) = change.interval_ratio {
+        if ratio < 1.0 {
+            parts.push("down".to_string());
+            parts.push(sym_interval_name(1.0 / ratio));
+        } else {
+            parts.push("up".to_string());
+            parts.push(sym_interval_name(ratio));
+        }
+    }
     if let Some(amount) = change.amount {
         parts.push("amount".to_string());
         parts.push(format!("{amount}"));
@@ -3691,6 +3700,30 @@ fn sym_change_src(change: command::SympatheticChange) -> String {
         parts.push(format!("{drums}"));
     }
     parts.join(" ")
+}
+
+fn sym_interval_name(ratio: f64) -> String {
+    let known = [
+        (1.0, "unison"),
+        (16.0 / 15.0, "minor-second"),
+        (9.0 / 8.0, "second"),
+        (6.0 / 5.0, "third"),
+        (5.0 / 4.0, "major-third"),
+        (4.0 / 3.0, "fourth"),
+        (45.0 / 32.0, "tritone"),
+        (3.0 / 2.0, "fifth"),
+        (8.0 / 5.0, "sixth"),
+        (5.0 / 3.0, "major-sixth"),
+        (9.0 / 5.0, "minor-seventh"),
+        (15.0 / 8.0, "seventh"),
+        (2.0, "octave"),
+    ];
+    known
+        .iter()
+        .find_map(|(known_ratio, name)| {
+            ((ratio - known_ratio).abs() < 0.000_001).then_some((*name).to_string())
+        })
+        .unwrap_or_else(|| format!("{ratio:.5}"))
 }
 
 fn value_change_src(change: ValueChange) -> String {
@@ -3918,6 +3951,7 @@ mod tests {
         assert_eq!(change.enabled, None);
         assert_eq!(change.decay, Some(0.999));
         assert_eq!(change.gain, Some(2.0));
+        assert_eq!(change.interval_ratio, None);
         assert_eq!(change.amount, None);
         assert_eq!(change.mic, None);
         assert_eq!(change.kanun, Some(0.5));
@@ -3936,8 +3970,16 @@ mod tests {
         assert_eq!(change.enabled, None);
         assert_eq!(change.decay, Some(0.9999));
         assert_eq!(change.gain, Some(8.0));
+        assert_eq!(change.interval_ratio, None);
         assert_eq!(change.amount, Some(1.5));
         assert_eq!(change.kanun, None);
+
+        app.handle_command("edit 5 sym up fifth");
+        assert_eq!(app.phrases[4].src, "sym up fifth");
+        let Some(ControlSpec::SetSympathetic(change)) = app.phrases[4].control else {
+            panic!("expected interval sym control");
+        };
+        assert_eq!(change.interval_ratio, Some(3.0 / 2.0));
     }
 
     #[test]
@@ -3960,6 +4002,35 @@ mod tests {
                 gain: Some(gain),
                 ..
             }) if (decay - 0.999).abs() < f32::EPSILON && (gain - 2.0).abs() < f32::EPSILON
+        ));
+
+        assert!(matches!(
+            command::parse("sym up third").unwrap(),
+            Cmd::Sympathetic(command::SympatheticChange {
+                interval_ratio: Some(ratio),
+                ..
+            }) if (ratio - 6.0 / 5.0).abs() < f64::EPSILON
+        ));
+        assert!(matches!(
+            command::parse("sym up major-third").unwrap(),
+            Cmd::Sympathetic(command::SympatheticChange {
+                interval_ratio: Some(ratio),
+                ..
+            }) if (ratio - 5.0 / 4.0).abs() < f64::EPSILON
+        ));
+        assert!(matches!(
+            command::parse("sym down fifth").unwrap(),
+            Cmd::Sympathetic(command::SympatheticChange {
+                interval_ratio: Some(ratio),
+                ..
+            }) if (ratio - 2.0 / 3.0).abs() < f64::EPSILON
+        ));
+        assert!(matches!(
+            command::parse("sym interval 3/2").unwrap(),
+            Cmd::Sympathetic(command::SympatheticChange {
+                interval_ratio: Some(ratio),
+                ..
+            }) if (ratio - 3.0 / 2.0).abs() < f64::EPSILON
         ));
     }
 

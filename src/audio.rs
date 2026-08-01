@@ -95,6 +95,8 @@ struct SympatheticBank {
     kanun: SympatheticPartition,
     bass: SympatheticPartition,
     drums: SympatheticPartition,
+    target_frequencies: Vec<f64>,
+    interval_ratio: f64,
 }
 
 impl SympatheticBank {
@@ -104,14 +106,26 @@ impl SympatheticBank {
             kanun: SympatheticPartition::new(sr, 0.0),
             bass: SympatheticPartition::new(sr, 0.0),
             drums: SympatheticPartition::new(sr, 0.0),
+            target_frequencies: Vec::new(),
+            interval_ratio: 1.0,
         }
     }
 
     fn set_targets(&mut self, frequencies: &[f64]) {
-        self.mic.strings.set_targets(frequencies);
-        self.kanun.strings.set_targets(frequencies);
-        self.bass.strings.set_targets(frequencies);
-        self.drums.strings.set_targets(frequencies);
+        self.target_frequencies = frequencies.to_vec();
+        self.apply_targets();
+    }
+
+    fn apply_targets(&mut self) {
+        let shifted: Vec<f64> = self
+            .target_frequencies
+            .iter()
+            .map(|frequency| frequency * self.interval_ratio)
+            .collect();
+        self.mic.strings.set_targets(&shifted);
+        self.kanun.strings.set_targets(&shifted);
+        self.bass.strings.set_targets(&shifted);
+        self.drums.strings.set_targets(&shifted);
     }
 
     fn has_energy(&self) -> bool {
@@ -168,6 +182,10 @@ impl SympatheticBank {
         }
         if let Some(value) = change.drums {
             self.drums.settings.amount = value;
+        }
+        if let Some(ratio) = change.interval_ratio {
+            self.interval_ratio = ratio;
+            self.apply_targets();
         }
     }
 

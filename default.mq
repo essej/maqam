@@ -1,7 +1,6 @@
 MAQAM_SESSION_V3
 V|28|vcf drums off
-Y|32|sym on
-Y|33|sym mic decay 0.999 drive 2 amount 0.99
+Y|33|sym on decay 0.999 drive 2 amount 0.99
 Y|34|sym kanun decay 0.995 drive 1.5 amount 0.1
 Y|35|sym bass decay 0.995 drive 1.5 amount 0.1
 V|21|vcf bass cut 1000 res 0.98 drive 1.25 wave squ

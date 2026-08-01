@@ -40,6 +40,7 @@ pub struct SympatheticChange {
     pub enabled: Option<bool>,
     pub decay: Option<f32>,
     pub gain: Option<f32>,
+    pub interval_ratio: Option<f64>,
     pub amount: Option<f32>,
     pub mic: Option<f32>,
     pub kanun: Option<f32>,
@@ -262,6 +263,23 @@ const SYM_PARAMETERS: &[CommandParameterMetadata] = &[
         notes: &["hard range is wide for sound design; ordinary edits should stay small"],
     },
     CommandParameterMetadata {
+        name: "up",
+        aliases: &["interval", "transpose"],
+        description: "multiply sympathetic resonator target strings upward by an ideal interval ratio",
+        values: &[
+            "unison", "second", "third", "fourth", "fifth", "sixth", "seventh", "octave",
+        ],
+        units: "ratio",
+        lower: Some(0.25),
+        upper: Some(4.0),
+        typical: "third, fourth, fifth, octave",
+        notes: &[
+            "`sym down <interval>` uses the reciprocal interval",
+            "explicit ratios are accepted, e.g. `sym interval 3/2`",
+            "third and sixth quality matters; use minor-third/major-third or minor-sixth/major-sixth",
+        ],
+    },
+    CommandParameterMetadata {
         name: "mic",
         aliases: &["input", "live"],
         description: "mic source send amount",
@@ -449,6 +467,16 @@ pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
         syntax: "sym decay <n> drive <n> kanun <n> bass <n>",
         description: "set multiple sympathetic parameters on a compressed global line",
         notes: &["only mentioned values change; omitted values keep their current value"],
+    },
+    LanguagePatternMetadata {
+        syntax: "sym up <interval> | sym down <interval> | sym interval <ratio>",
+        description: "transpose sympathetic resonator target strings",
+        notes: &[
+            "named intervals include second, third, fourth, fifth, sixth, seventh, and octave",
+            "named intervals use ideal ratios: minor-third=6/5, major-third=5/4, fourth=4/3, fifth=3/2, octave=2/1",
+            "generic third means minor-third; use major-third when the harmony needs 5/4",
+            "explicit ratios like `sym interval 3/2` are accepted",
+        ],
     },
     LanguagePatternMetadata {
         syntax: "sym <all|mic|kanun|bass|drums> decay <n> drive <n> amount <n>",
@@ -1377,7 +1405,7 @@ fn parse_ratio(s: &str) -> Option<(u32, u32)> {
 }
 
 fn parse_sympathetic_change(input: &str) -> Result<SympatheticChange, String> {
-    let usage = "usage: sym [all|mic|kanun|bass|drums] [on|off] [decay <0.9..0.99999>] [drive <0..512>] [amount <0..512>] [mic <0..512>] [kanun <0..512>] [bass <0..512>] [drums <0..512>]";
+    let usage = "usage: sym [all|mic|kanun|bass|drums] [on|off] [decay <0.9..0.99999>] [drive <0..512>] [up|down <interval>] [interval <ratio>] [amount <0..512>] [mic <0..512>] [kanun <0..512>] [bass <0..512>] [drums <0..512>]";
     let mut tokens = input.split_whitespace();
     tokens.next();
     let mut rest: Vec<&str> = tokens.collect();
@@ -1430,6 +1458,23 @@ fn parse_sympathetic_change(input: &str) -> Result<SympatheticChange, String> {
                 change.amount = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
                 i += 1;
             }
+            "up" => {
+                i += 1;
+                let ratio = parse_sym_interval_ratio(rest.get(i).copied(), usage)?;
+                change.interval_ratio = Some(ratio);
+                i += 1;
+            }
+            "down" => {
+                i += 1;
+                let ratio = parse_sym_interval_ratio(rest.get(i).copied(), usage)?;
+                change.interval_ratio = Some(1.0 / ratio);
+                i += 1;
+            }
+            "interval" | "transpose" => {
+                i += 1;
+                change.interval_ratio = Some(parse_sym_interval_ratio(rest.get(i).copied(), usage)?);
+                i += 1;
+            }
             "mic" | "input" | "live" => {
                 i += 1;
                 change.mic = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
@@ -1462,8 +1507,60 @@ fn parse_sympathetic_change(input: &str) -> Result<SympatheticChange, String> {
 fn is_sym_setting_token(token: &str) -> bool {
     matches!(
         token.to_ascii_lowercase().as_str(),
-        "on" | "off" | "decay" | "gain" | "drive" | "amount" | "amt" | "level" | "send"
+        "on"
+            | "off"
+            | "decay"
+            | "gain"
+            | "drive"
+            | "amount"
+            | "amt"
+            | "level"
+            | "send"
+            | "up"
+            | "down"
+            | "interval"
+            | "transpose"
     )
+}
+
+fn parse_sym_interval_ratio(value: Option<&str>, usage: &str) -> Result<f64, String> {
+    let token = value.ok_or(usage)?.to_ascii_lowercase();
+    if let Some((num, den)) = token.split_once('/') {
+        let num = num.parse::<f64>().map_err(|_| usage.to_string())?;
+        let den = den.parse::<f64>().map_err(|_| usage.to_string())?;
+        if den == 0.0 {
+            return Err("sym interval ratio cannot divide by zero".into());
+        }
+        return validate_sym_interval_ratio(num / den);
+    }
+    if let Ok(ratio) = token.parse::<f64>() {
+        return validate_sym_interval_ratio(ratio);
+    }
+    let normalized = token.replace(['-', '_', ' '], "");
+    let ratio = match normalized.as_str() {
+        "unison" | "root" => 1.0,
+        "minorsecond" | "minor2" | "m2" | "b2" | "semitone" | "halfstep" => 16.0 / 15.0,
+        "second" | "majorsecond" | "major2" | "wholestep" | "whole" => 9.0 / 8.0,
+        "third" | "minorthird" | "minor3" | "min3" | "m3" | "b3" => 6.0 / 5.0,
+        "majorthird" | "major3" | "maj3" => 5.0 / 4.0,
+        "fourth" | "perfectfourth" | "p4" => 4.0 / 3.0,
+        "tritone" | "flatfifth" | "sharpfourth" | "b5" | "#4" => 45.0 / 32.0,
+        "fifth" | "perfectfifth" | "p5" => 3.0 / 2.0,
+        "sixth" | "minorsixth" | "minor6" | "min6" | "m6" | "b6" => 8.0 / 5.0,
+        "majorsixth" | "major6" | "maj6" => 5.0 / 3.0,
+        "minorseventh" | "m7" | "b7" => 9.0 / 5.0,
+        "seventh" | "majorseventh" | "major7" => 15.0 / 8.0,
+        "octave" | "oct" | "8ve" => 2.0,
+        _ => return Err(usage.to_string()),
+    };
+    validate_sym_interval_ratio(ratio)
+}
+
+fn validate_sym_interval_ratio(ratio: f64) -> Result<f64, String> {
+    if !(0.25..=4.0).contains(&ratio) {
+        return Err("sym interval ratio out of range 1/4..4/1".into());
+    }
+    Ok(ratio)
 }
 
 fn parse_sym_gain(value: Option<&str>, usage: &str) -> Result<f32, String> {
