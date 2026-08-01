@@ -49,6 +49,15 @@ pub struct SympatheticChange {
     pub drums: Option<f32>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum NamCommand {
+    Load { path: String },
+    Import { path: String, name: Option<String> },
+    List,
+    Off,
+    Gain(f32),
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SympatheticHarmonyComponent {
     pub ratio: f64,
@@ -418,6 +427,87 @@ pub const SYM_METADATA: CommandMetadata = CommandMetadata {
     ],
 };
 
+const NAM_PARAMETERS: &[CommandParameterMetadata] = &[
+    CommandParameterMetadata {
+        name: "load",
+        aliases: &[],
+        description: "load a cached NAM capture name, .nam file path, or URL for live mic input",
+        values: &[],
+        units: "name/path/url",
+        lower: None,
+        upper: None,
+        typical: "nam metallica",
+        notes: &[
+            "the `load` word is optional; `nam metallica` and `nam load metallica` are accepted",
+            "use `nam import FILENAME.nam as name` before loading by cached name",
+            "URL loads download into the local cache first and show progress",
+        ],
+    },
+    CommandParameterMetadata {
+        name: "import",
+        aliases: &["pull"],
+        description: "copy or download a .nam file into the local NAM capture cache",
+        values: &[],
+        units: "path/url/name",
+        lower: None,
+        upper: None,
+        typical: "nam import https://example.com/amp.nam as amp",
+        notes: &[
+            "without `as name`, the cache name is derived from the file name or URL",
+            "by default captures are cached in ./.nam, which is created automatically",
+            "URL imports show a progress meter while downloading",
+        ],
+    },
+    CommandParameterMetadata {
+        name: "ls",
+        aliases: &["list"],
+        description: "list cached NAM captures and .nam files in the current directory",
+        values: &[],
+        units: "",
+        lower: None,
+        upper: None,
+        typical: "",
+        notes: &[],
+    },
+    CommandParameterMetadata {
+        name: "gain",
+        aliases: &["drive"],
+        description: "input gain before the NAM model",
+        values: &[],
+        units: "",
+        lower: Some(0.0),
+        upper: Some(8.0),
+        typical: "0.5..2",
+        notes: &["use this to control how hard the amp model is driven"],
+    },
+    CommandParameterMetadata {
+        name: "off",
+        aliases: &[],
+        description: "bypass the live input NAM model",
+        values: &[],
+        units: "",
+        lower: None,
+        upper: None,
+        typical: "",
+        notes: &[],
+    },
+];
+
+pub const NAM_METADATA: CommandMetadata = CommandMetadata {
+    name: "nam",
+    aliases: &[],
+    description: "live mic-input Neural Amp Modeler A1/A2 amp stage",
+    targets: &[],
+    parameters: NAM_PARAMETERS,
+    first_parameter: "load",
+    notes: &[
+        "NAM is live input state and is not saved in .mq files",
+        "the chain is mic input -> NAM -> vcf mic or vcf all -> output",
+        "cached captures live under ./.nam unless MAQAM_NAM_CACHE_DIR is set",
+        "NAM models have an expected sample rate; set the audio device to that rate if the model sounds wrong",
+    ],
+};
+
 pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
     LanguagePatternMetadata {
         syntax: "<root> <jins> [rhythm]",
@@ -567,6 +657,17 @@ pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
         notes: &[],
     },
     LanguagePatternMetadata {
+        syntax: "nam import FILENAME.nam [as name] | nam import URL [as name] | nam <name|FILENAME.nam|URL> | nam load <name|FILENAME.nam|URL> | nam ls | nam off | nam gain <0..8>",
+        description: "cache, load, list, or bypass Neural Amp Modeler A1/A2 captures on live mic input",
+        notes: &[
+            "NAM is live input state and is not saved in .mq files",
+            "do not invent fake NAM paths; use a real local .nam file or URL",
+            "import a capture once, then load it later by cached name",
+            "`nam ls` browses cached captures plus .nam files in the current directory",
+            "use `vcf mic` to filter the modeled input bus or `vcf all` to filter the final mix",
+        ],
+    },
+    LanguagePatternMetadata {
         syntax: "create <Name> <ratios...> | delete <Name>",
         description: "create or delete a custom jins",
         notes: &["ratios use forms like 1/1 9/8 5/4"],
@@ -588,7 +689,7 @@ pub fn language_reference() -> String {
     }
     out.push('\n');
     out.push_str("Nouns:\n");
-    for meta in [&VCF_METADATA, &SYM_METADATA] {
+    for meta in [&VCF_METADATA, &SYM_METADATA, &NAM_METADATA] {
         out.push_str("- `");
         out.push_str(meta.name);
         out.push_str("`: ");
@@ -706,7 +807,7 @@ fn format_number(n: f64) -> String {
 
 pub fn command_metadata(head: &str) -> Option<&'static CommandMetadata> {
     let head = head.to_ascii_lowercase();
-    [&VCF_METADATA, &SYM_METADATA]
+    [&VCF_METADATA, &SYM_METADATA, &NAM_METADATA]
         .into_iter()
         .find(|meta| meta.name == head || meta.aliases.contains(&head.as_str()))
 }
@@ -890,6 +991,7 @@ pub enum Cmd {
     SetSustain(ValueChange),
     SetVcf(VcfChange),
     SetFx(FxChange),
+    SetNam(NamCommand),
     SetVol(f32),
     Record(usize),
     TogglePause {
@@ -1232,6 +1334,75 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
     // ── FX ───────────────────────────────────────────────────────────────
     if matches!(al.as_str(), "fx" | "reverb" | "rev" | "delay" | "pingpong") && digits.is_empty() {
         return Ok(Cmd::SetFx(parse_fx_change(input)?));
+    }
+
+    // ── NAM input amp model ──────────────────────────────────────────────
+    if al == "nam" {
+        let rest = input
+            .split_once(char::is_whitespace)
+            .map(|(_, rest)| rest.trim())
+            .filter(|s| !s.is_empty())
+            .ok_or("usage: nam <cached-name|FILENAME.nam|URL> | nam import <FILENAME.nam|URL> [as name] | nam ls | nam off | nam gain <0..8>")?;
+        let mut toks = rest.split_whitespace();
+        match toks.next().unwrap_or("").to_ascii_lowercase().as_str() {
+            "off" => return Ok(Cmd::SetNam(NamCommand::Off)),
+            "ls" | "list" => return Ok(Cmd::SetNam(NamCommand::List)),
+            "import" | "pull" => {
+                let import_rest = rest
+                    .split_once(char::is_whitespace)
+                    .map(|(_, value)| value.trim())
+                    .filter(|s| !s.is_empty())
+                    .ok_or("usage: nam import <FILENAME.nam|URL> [as name]; type a real .nam file name or URL after nam import")?;
+                let (path, name) = if let Some((path, name)) = import_rest.rsplit_once(" as ") {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        return Err(
+                            "usage: nam import <FILENAME.nam|URL> as name; type a cache name after as"
+                                .into(),
+                        );
+                    }
+                    (path.trim().to_string(), Some(name.to_string()))
+                } else {
+                    (import_rest.to_string(), None)
+                };
+                if path.is_empty() {
+                    return Err(
+                        "usage: nam import <FILENAME.nam|URL> [as name]; type a real .nam file name or URL after nam import"
+                            .into(),
+                    );
+                }
+                return Ok(Cmd::SetNam(NamCommand::Import { path, name }));
+            }
+            "gain" | "drive" => {
+                let value = toks
+                    .next()
+                    .ok_or("usage: nam gain <0..8>; type a number after nam gain")?;
+                let gain = value
+                    .parse::<f32>()
+                    .map_err(|_| format!("bad NAM gain '{value}'; type a number from 0 to 8"))?;
+                if !(0.0..=8.0).contains(&gain) {
+                    return Err(format!(
+                        "NAM gain {gain} out of range 0..8; use nam gain <0..8>"
+                    ));
+                }
+                return Ok(Cmd::SetNam(NamCommand::Gain(gain)));
+            }
+            "load" => {
+                let path = rest
+                    .split_once(char::is_whitespace)
+                    .map(|(_, path)| path.trim())
+                    .filter(|s| !s.is_empty())
+                    .ok_or("usage: nam load <model.nam|cached-name|URL>; type a .nam path, cached name, or URL after nam load")?;
+                return Ok(Cmd::SetNam(NamCommand::Load {
+                    path: path.to_string(),
+                }));
+            }
+            _ => {
+                return Ok(Cmd::SetNam(NamCommand::Load {
+                    path: rest.to_string(),
+                }));
+            }
+        }
     }
 
     // ── VOL ───────────────────────────────────────────────────────────────

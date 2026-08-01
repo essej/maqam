@@ -13,6 +13,7 @@ crossterm         = "0.28"
 crossbeam-channel = "0.5"
 anyhow            = "1.0"
 contracts         = "0.6"
+nam-rs            = "0.4"
 ureq              = { version = "2.12", features = ["json"] }
 serde_json        = "1.0"
 # Keep ureq's URL/idna tree compatible with rust-toolchain.toml's Rust 1.85.

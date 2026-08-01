@@ -1,6 +1,6 @@
 // app.rs — application state, phrases as top-level units
 
-use crate::command::{self, Cmd, JinsSpec, LlmProvider, ValueChange};
+use crate::command::{self, Cmd, JinsSpec, LlmProvider, NamCommand, ValueChange};
 use crate::fx::FxSettings;
 use crate::record;
 use crate::sequencer::{build_control_entry, build_phrase, AudioCmd, BarSpec, ControlSpec, Phrase};
@@ -8,7 +8,21 @@ use crate::tuning::Pitch;
 use crate::vcf::{VcfBank, VcfSettings, VcfTarget, VcoWave};
 use crossbeam_channel::Sender;
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+#[derive(Clone, Debug)]
+pub struct NamDownloadProgress {
+    pub name: String,
+    pub downloaded: u64,
+    pub total: Option<u64>,
+    pub load_after: bool,
+}
+
+enum NamDownloadEvent {
+    Progress { downloaded: u64, total: Option<u64> },
+    Done { name: String, load_after: bool },
+}
 
 pub struct App {
     pub phrases: Vec<Phrase>,
@@ -18,20 +32,24 @@ pub struct App {
     pub show_jins: bool,
     pub help_scroll: u16,
     pub jins_scroll: u16,
+    pub message_scroll: u16,
     pub bpm: f64,
     pub sustain: f64,
     pub vcf: VcfBank,
     pub fx: FxSettings,
     pub vol: f32,
     pub tune_to: Pitch,
+    pub live_nam_commands: Vec<String>,
     pub paused: bool,
     pub should_quit: bool,
     pub last_recording: Option<String>,
+    pub nam_download_progress: Option<NamDownloadProgress>,
     pub history: Vec<String>,
     pub history_pos: Option<usize>,
     pub saved_input: String,
     pub cursor_pos: usize,
     pub rec_rx: Option<crossbeam_channel::Receiver<Result<String, String>>>,
+    nam_download_rx: Option<crossbeam_channel::Receiver<Result<NamDownloadEvent, String>>>,
     llm_rx: Option<crossbeam_channel::Receiver<Result<LlmOutcome, String>>>,
     llm_history: Vec<LlmChatMessage>,
     session_path: Option<String>,
@@ -54,20 +72,24 @@ impl App {
             show_jins: false,
             help_scroll: 0,
             jins_scroll: 0,
+            message_scroll: 0,
             bpm: 120.0,
             sustain: 1.25,
             vcf: VcfBank::default(),
             fx: FxSettings::default(),
             vol: 1.0,
             tune_to: Pitch::parse("d").unwrap(),
+            live_nam_commands: Vec::new(),
             paused: false,
             should_quit: false,
             last_recording: None,
+            nam_download_progress: None,
             history: Vec::new(),
             history_pos: None,
             saved_input: String::new(),
             cursor_pos: 0,
             rec_rx: None,
+            nam_download_rx: None,
             llm_rx: None,
             llm_history: Vec::new(),
             session_path: None,
@@ -331,6 +353,18 @@ impl App {
         }
     }
 
+    pub fn message_scroll_up(&mut self) {
+        self.message_scroll = self.message_scroll.saturating_sub(1);
+    }
+
+    pub fn message_scroll_down(&mut self) {
+        self.message_scroll = self.message_scroll.saturating_add(1);
+    }
+
+    pub fn message_scroll_home(&mut self) {
+        self.message_scroll = 0;
+    }
+
     // ── Render thread poll ────────────────────────────────────────────────
 
     pub fn tick(&mut self) {
@@ -381,6 +415,52 @@ impl App {
                 }
                 self.rec_rx = None;
             }
+        }
+        self.poll_nam_download();
+    }
+
+    fn poll_nam_download(&mut self) {
+        let mut finished = false;
+        if let Some(rx) = &self.nam_download_rx {
+            while let Ok(result) = rx.try_recv() {
+                match result {
+                    Ok(NamDownloadEvent::Progress { downloaded, total }) => {
+                        if let Some(progress) = &mut self.nam_download_progress {
+                            progress.downloaded = downloaded;
+                            progress.total = total;
+                        }
+                    }
+                    Ok(NamDownloadEvent::Done { name, load_after }) => {
+                        finished = true;
+                        self.nam_download_progress = None;
+                        if load_after {
+                            match nam_load_audio_cmd(&name) {
+                                Ok((audio_cmd, message)) => {
+                                    let _ = self.audio_tx.send(audio_cmd);
+                                    replace_live_nam_command(
+                                        &mut self.live_nam_commands,
+                                        Some(format!("nam {name}")),
+                                    );
+                                    self.message = Some(message);
+                                }
+                                Err(err) => {
+                                    self.message = Some(format!("✗ {err}"));
+                                }
+                            }
+                        } else {
+                            self.message = Some(format!("NAM capture downloaded: {name}"));
+                        }
+                    }
+                    Err(err) => {
+                        finished = true;
+                        self.nam_download_progress = None;
+                        self.message = Some(format!("✗ {err}"));
+                    }
+                }
+            }
+        }
+        if finished {
+            self.nam_download_rx = None;
         }
     }
 
@@ -987,7 +1067,16 @@ impl App {
             Cmd::Load { path } => match self.load_session(&path) {
                 Ok(()) => {
                     self.session_path = Some(path.clone());
-                    self.message = Some(format!("loaded session ← {path}"));
+                    let load_detail = self.message.take();
+                    self.message = Some(match load_detail {
+                        Some(detail) if detail.starts_with("loaded session; ") => {
+                            format!(
+                                "loaded session ← {path}; {}",
+                                detail.trim_start_matches("loaded session; ")
+                            )
+                        }
+                        _ => format!("loaded session ← {path}"),
+                    });
                 }
                 Err(e) => self.message = Some(format!("✗ load failed: {e}")),
             },
@@ -1138,6 +1227,9 @@ impl App {
                 let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry));
                 let _ = self.audio_tx.send(AudioCmd::SetFx(change));
                 self.message = Some(format!("FX line → {}", describe_fx(fx)));
+            }
+            Cmd::SetNam(command) => {
+                self.apply_nam_command(command);
             }
 
             Cmd::EditJump { id, to, times } => {
@@ -1410,6 +1502,151 @@ impl App {
         }
     }
 
+    fn apply_nam_command(&mut self, command: NamCommand) {
+        let display_src = nam_command_src(&command);
+        match command {
+            NamCommand::Off => {
+                let _ = self.audio_tx.send(AudioCmd::SetNamModel(None));
+                replace_live_nam_command(&mut self.live_nam_commands, display_src);
+                self.message = Some("NAM input amp off".into());
+            }
+            NamCommand::List => {
+                let cache_dir = nam_cache_dir();
+                let cached = list_cached_nam_models(&cache_dir);
+                let files = list_current_dir_nam_files();
+                self.message = Some(match (cached, files) {
+                    (Ok(cached), Ok(files)) if cached.is_empty() && files.is_empty() => {
+                        format!(
+                            "no NAM captures found; {} is ready. Run `nam import URL as name` to download into it, or `nam import FILENAME.nam as name` to cache a local file",
+                            cache_dir.display()
+                        )
+                    }
+                    (Ok(cached), Ok(files)) => {
+                        let mut parts = Vec::new();
+                        if !cached.is_empty() {
+                            parts.push(format!("cached: {}", cached.join("  ")));
+                        }
+                        if !files.is_empty() {
+                            parts.push(format!("files: {}", files.join("  ")));
+                        }
+                        parts.join(" | ")
+                    }
+                    (Err(err), _) => format!(
+                        "✗ cannot list NAM cache {}: {err}; create ./.nam or set MAQAM_NAM_CACHE_DIR",
+                        cache_dir.display()
+                    ),
+                    (Ok(_), Err(err)) => format!(
+                        "✗ cannot list NAM files in current directory: {err}; check directory permissions"
+                    ),
+                });
+            }
+            NamCommand::Gain(gain) => {
+                let _ = self.audio_tx.send(AudioCmd::SetNamGain(gain));
+                replace_live_nam_command(&mut self.live_nam_commands, display_src);
+                self.message = Some(format!("NAM input gain {gain:.2}"));
+            }
+            NamCommand::Import { path, name } => {
+                if is_http_url(&path) {
+                    self.start_nam_download(path, name, false);
+                    return;
+                }
+                let source = Path::new(&path);
+                if !source.is_file() {
+                    self.message = Some(format!(
+                        "✗ NAM model file not found: {path}; run `nam import URL as name` to download into ./.nam, or `nam import FILENAME.nam as name` for a real local file"
+                    ));
+                    return;
+                }
+                let cache_dir = nam_cache_dir();
+                if let Err(err) = fs::create_dir_all(&cache_dir) {
+                    self.message = Some(format!(
+                        "✗ cannot create NAM cache {}: {err}; create ./.nam or set MAQAM_NAM_CACHE_DIR to a writable directory",
+                        cache_dir.display()
+                    ));
+                    return;
+                }
+                let cache_name = name
+                    .as_deref()
+                    .map(sanitize_nam_cache_name)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| nam_cache_name_from_path(source));
+                let dest = cache_dir.join(format!("{cache_name}.nam"));
+                if let Err(err) = fs::copy(source, &dest) {
+                    self.message = Some(format!(
+                        "✗ cannot import NAM model to {}: {err}; check file permissions on ./.nam or set MAQAM_NAM_CACHE_DIR",
+                        dest.display()
+                    ));
+                    return;
+                }
+                self.message = Some(format!("NAM capture imported: {cache_name}"));
+            }
+            NamCommand::Load { path } => {
+                if is_http_url(&path) {
+                    self.start_nam_download(path, None, true);
+                    return;
+                }
+                let (audio_cmd, message) = match nam_load_audio_cmd(&path) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        self.message = Some(format!("✗ {err}"));
+                        return;
+                    }
+                };
+                let _ = self.audio_tx.send(audio_cmd);
+                replace_live_nam_command(&mut self.live_nam_commands, display_src);
+                self.message = Some(message);
+            }
+        }
+    }
+
+    fn start_nam_download(&mut self, url: String, name: Option<String>, load_after: bool) {
+        if self.nam_download_rx.is_some() {
+            self.message = Some(
+                "✗ NAM download already running; wait for it to finish, then run the command again"
+                    .into(),
+            );
+            return;
+        }
+        let cache_dir = nam_cache_dir();
+        if let Err(err) = fs::create_dir_all(&cache_dir) {
+            self.message = Some(format!(
+                "✗ cannot create NAM cache {}: {err}; create ./.nam or set MAQAM_NAM_CACHE_DIR to a writable directory",
+                cache_dir.display()
+            ));
+            return;
+        }
+        let cache_name = name
+            .as_deref()
+            .map(sanitize_nam_cache_name)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| nam_cache_name_from_url(&url));
+        if cache_name.is_empty() {
+            self.message = Some(
+                "✗ cannot infer a NAM cache name from that URL; run `nam import URL as name`"
+                    .into(),
+            );
+            return;
+        }
+
+        let (tx, rx) = crossbeam_channel::bounded(32);
+        self.nam_download_rx = Some(rx);
+        self.nam_download_progress = Some(NamDownloadProgress {
+            name: cache_name.clone(),
+            downloaded: 0,
+            total: None,
+            load_after,
+        });
+        self.message = Some(format!("downloading NAM capture → {cache_name}"));
+
+        std::thread::spawn(move || {
+            let result =
+                download_nam_capture(&url, &cache_dir, &cache_name, load_after, tx.clone());
+            if let Err(err) = result {
+                let _ = tx.send(Err(err));
+            }
+        });
+    }
+
     /// Push a BPM update to the clockout thread if it's running.
     fn push_clockout_bpm(&self, bpm: f64) {
         if let Some(tx) = &self.clockout_tx {
@@ -1524,9 +1761,7 @@ impl App {
                 }
             };
             if !llm_edit_command_allowed(&parsed) {
-                self.message = Some(format!(
-                    "✗ LLM returned `{command_src}`, but LLM edits cannot run save/load/playback/system commands; ask it for score-edit commands only"
-                ));
+                self.message = Some(llm_rejected_edit_command_message(command_src, &parsed));
                 return;
             }
             parsed_commands.push(parsed);
@@ -1720,6 +1955,9 @@ impl App {
         let mut max_id = None;
         let mut next_legacy_id = 0usize;
         let mut last_rhythm = vec![3, 3, 2];
+        let mut live_nam_audio_cmds = Vec::new();
+        let mut live_nam_commands = Vec::new();
+        let mut live_nam_warnings = Vec::new();
 
         for (line_idx, raw_line) in lines.enumerate() {
             let line_no = line_idx + 2;
@@ -1737,6 +1975,23 @@ impl App {
                 continue;
             }
             if line.starts_with("vol ") {
+                continue;
+            }
+            if line
+                .split_whitespace()
+                .next()
+                .is_some_and(|word| word.eq_ignore_ascii_case("nam"))
+            {
+                let parsed = command::parse(line).map_err(|e| format!("line {line_no}: {e}"))?;
+                let Cmd::SetNam(command) = parsed else {
+                    return Err(format!("line {line_no}: expected nam line"));
+                };
+                let display_src = nam_command_src(&command);
+                match nam_session_audio_cmd(command) {
+                    Ok(audio_cmd) => live_nam_audio_cmds.push(audio_cmd),
+                    Err(err) => live_nam_warnings.push(format!("line {line_no}: {err}")),
+                }
+                replace_live_nam_command(&mut live_nam_commands, display_src);
                 continue;
             }
             if is_plain_control_line(line) {
@@ -2009,6 +2264,7 @@ impl App {
         self.vcf = new_vcf;
         self.fx = new_fx;
         self.vol = new_vol;
+        self.live_nam_commands = live_nam_commands;
         self.paused = false;
         let (start_bpm, start_sustain, start_vcf, start_fx) = self.sequence_start_settings();
 
@@ -2019,10 +2275,18 @@ impl App {
         let _ = self.audio_tx.send(AudioCmd::SetFxSettings(start_fx));
         let _ = self.audio_tx.send(AudioCmd::SetVol(self.vol));
         let _ = self.audio_tx.send(AudioCmd::SetPaused(false));
+        for cmd in live_nam_audio_cmds {
+            let _ = self.audio_tx.send(cmd);
+        }
         for phrase in loaded {
             let _ = self.audio_tx.send(AudioCmd::AddPhrase(phrase));
         }
         let _ = self.audio_tx.send(AudioCmd::SetCurPhrase(0));
+        if let Some(warning) = live_nam_warnings.first() {
+            self.message = Some(format!(
+                "loaded session; NAM not loaded: {warning}. Score loaded without the live amp."
+            ));
+        }
         Ok(())
     }
 
@@ -2485,7 +2749,8 @@ fn ask_chatgpt(
     history: &[LlmChatMessage],
     score_context: &str,
 ) -> Result<String, String> {
-    let messages = openai_messages(history, prompt, score_context);
+    let prompt_for_model = prompt_with_automatic_nam_research(prompt)?;
+    let mut messages = openai_messages(history, &prompt_for_model, score_context);
     let response: serde_json::Value = ureq::post("https://api.openai.com/v1/chat/completions")
         .set("Authorization", &format!("Bearer {key}"))
         .set("Content-Type", "application/json")
@@ -2493,11 +2758,59 @@ fn ask_chatgpt(
         .send_json(serde_json::json!({
             "model": model,
             "messages": messages,
-            "temperature": 0.2
+            "temperature": 0.2,
+            "tools": [openai_find_nam_captures_tool()],
+            "tool_choice": "auto"
         }))
         .map_err(describe_http_error)?
         .into_json()
         .map_err(|e| format!("chatgpt response parse failed: {e}"))?;
+    if let Some(calls) = response
+        .pointer("/choices/0/message/tool_calls")
+        .and_then(|value| value.as_array())
+        .filter(|calls| !calls.is_empty())
+    {
+        let assistant_message =
+            response
+                .pointer("/choices/0/message")
+                .cloned()
+                .ok_or_else(|| {
+                    "chatgpt tool response had no assistant message; ask again".to_string()
+                })?;
+        messages.push(assistant_message);
+        for call in calls {
+            let id = call
+                .get("id")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "chatgpt tool call had no id; ask again".to_string())?;
+            let result = execute_openai_llm_tool(call)?;
+            messages.push(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "content": result
+            }));
+        }
+        let response: serde_json::Value = ureq::post("https://api.openai.com/v1/chat/completions")
+            .set("Authorization", &format!("Bearer {key}"))
+            .set("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(30))
+            .send_json(serde_json::json!({
+                "model": model,
+                "messages": messages,
+                "temperature": 0.2
+            }))
+            .map_err(describe_http_error)?
+            .into_json()
+            .map_err(|e| format!("chatgpt response parse failed after NAM search: {e}"))?;
+        return response
+            .pointer("/choices/0/message/content")
+            .and_then(|value| value.as_str())
+            .map(clean_llm_answer)
+            .filter(|answer| !answer.is_empty())
+            .ok_or_else(|| {
+                "chatgpt returned no message after NAM search; try again, or paste a direct .nam URL and run `nam import URL as name`".into()
+            });
+    }
     response
         .pointer("/choices/0/message/content")
         .and_then(|value| value.as_str())
@@ -2563,7 +2876,8 @@ fn ask_claude(
     history: &[LlmChatMessage],
     score_context: &str,
 ) -> Result<String, String> {
-    let messages = anthropic_messages(history, prompt);
+    let prompt_for_model = prompt_with_automatic_nam_research(prompt)?;
+    let mut messages = anthropic_messages(history, &prompt_for_model);
     let response: serde_json::Value = ureq::post("https://api.anthropic.com/v1/messages")
         .set("x-api-key", key)
         .set("anthropic-version", "2023-06-01")
@@ -2573,11 +2887,77 @@ fn ask_claude(
             "model": model,
             "max_tokens": 500,
             "system": llm_system_prompt(score_context),
-            "messages": messages
+            "messages": messages,
+            "tools": [anthropic_find_nam_captures_tool()]
         }))
         .map_err(describe_http_error)?
         .into_json()
         .map_err(|e| format!("claude response parse failed: {e}"))?;
+    let content = response
+        .get("content")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| {
+            "claude returned no content; try asking again, or set ANTHROPIC_MODEL to a messages-capable model".to_string()
+        })?;
+    let tool_uses = content
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("tool_use")
+                && item.get("name").and_then(|value| value.as_str()) == Some("find_nam_captures")
+        })
+        .collect::<Vec<_>>();
+    if !tool_uses.is_empty() {
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": content
+        }));
+        let mut tool_results = Vec::new();
+        for tool_use in tool_uses {
+            let id = tool_use
+                .get("id")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "claude NAM search tool call had no id; ask again".to_string())?;
+            let result = execute_anthropic_llm_tool(tool_use)?;
+            tool_results.push(serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": id,
+                "content": result
+            }));
+        }
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": tool_results
+        }));
+        let response: serde_json::Value = ureq::post("https://api.anthropic.com/v1/messages")
+            .set("x-api-key", key)
+            .set("anthropic-version", "2023-06-01")
+            .set("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(30))
+            .send_json(serde_json::json!({
+                "model": model,
+                "max_tokens": 500,
+                "system": llm_system_prompt(score_context),
+                "messages": messages
+            }))
+            .map_err(describe_http_error)?
+            .into_json()
+            .map_err(|e| format!("claude response parse failed after NAM search: {e}"))?;
+        return response
+            .get("content")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.get("text").and_then(|text| text.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .map(|answer| clean_llm_answer(&answer))
+            .filter(|answer| !answer.is_empty())
+            .ok_or_else(|| {
+                "claude returned no text after NAM search; try again, or paste a direct .nam URL and run `nam import URL as name`".into()
+            });
+    }
     response
         .get("content")
         .and_then(|value| value.as_array())
@@ -2673,7 +3053,12 @@ fn compact_error_body(body: &str) -> String {
 }
 
 fn clean_llm_answer(answer: &str) -> String {
-    answer.split_whitespace().collect::<Vec<_>>().join(" ")
+    answer
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn openai_messages(
@@ -2741,6 +3126,39 @@ fn anthropic_apply_commands_tool() -> serde_json::Value {
     })
 }
 
+fn openai_find_nam_captures_tool() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "find_nam_captures",
+            "description": "Search the web for real Neural Amp Modeler (.nam) capture pages or direct .nam download links. Use this when the user asks for an amp model, NAM capture, or a style such as Metallica. Return only real links from the tool result; never invent local paths or URLs.",
+            "parameters": find_nam_captures_tool_input_schema()
+        }
+    })
+}
+
+fn anthropic_find_nam_captures_tool() -> serde_json::Value {
+    serde_json::json!({
+        "name": "find_nam_captures",
+        "description": "Search the web for real Neural Amp Modeler (.nam) capture pages or direct .nam download links. Use this when the user asks for an amp model, NAM capture, or a style such as Metallica. Return only real links from the tool result; never invent local paths or URLs.",
+        "input_schema": find_nam_captures_tool_input_schema()
+    })
+}
+
+fn find_nam_captures_tool_input_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Amp, artist, tone, or capture search terms, for example `Metallica Mesa Mark IIC+ NAM`."
+            }
+        },
+        "required": ["query"]
+    })
+}
+
 fn apply_commands_tool_input_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
@@ -2774,6 +3192,348 @@ fn extract_tool_commands(input: &serde_json::Value) -> Result<Vec<String>, Strin
         );
     }
     Ok(commands)
+}
+
+fn execute_openai_llm_tool(call: &serde_json::Value) -> Result<String, String> {
+    let name = call
+        .pointer("/function/name")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "chatgpt tool call had no function name; ask again".to_string())?;
+    let arguments = call
+        .pointer("/function/arguments")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "chatgpt tool call had no arguments; ask again".to_string())?;
+    let input = serde_json::from_str::<serde_json::Value>(arguments)
+        .map_err(|err| format!("chatgpt tool arguments were not valid JSON: {err}; ask again"))?;
+    execute_llm_tool(name, &input)
+}
+
+fn execute_anthropic_llm_tool(tool_use: &serde_json::Value) -> Result<String, String> {
+    let name = tool_use
+        .get("name")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "claude tool call had no name; ask again".to_string())?;
+    let input = tool_use
+        .get("input")
+        .ok_or_else(|| "claude tool call had no input; ask again".to_string())?;
+    execute_llm_tool(name, input)
+}
+
+fn execute_llm_tool(name: &str, input: &serde_json::Value) -> Result<String, String> {
+    match name {
+        "find_nam_captures" => {
+            let query = input
+                .get("query")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    "find_nam_captures needs a non-empty query; ask for a specific amp, artist, or tone"
+                        .to_string()
+                })?;
+            find_nam_captures(query)
+        }
+        other => Err(format!(
+            "unknown LLM tool `{other}`; ask again using maqam-live tools only"
+        )),
+    }
+}
+
+fn prompt_with_automatic_nam_research(prompt: &str) -> Result<String, String> {
+    if !llm_prompt_needs_nam_research(prompt) {
+        return Ok(prompt.to_string());
+    }
+    let results = find_nam_captures(prompt)?;
+    Ok(format!(
+        "{prompt}\n\nmaqam-live already performed NAM capture research for this request:\n{results}\n\nUse these researched links directly. Do not tell the user to go research amp models. If there is a direct .nam URL, give the exact `nam import URL as name` command. If there are only result pages, give the best result links and explain that maqam-live could not extract a direct .nam URL from those pages."
+    ))
+}
+
+fn llm_prompt_needs_nam_research(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    let mentions_nam_or_amp = lower.contains(".nam")
+        || lower.contains(" nam ")
+        || lower.starts_with("nam ")
+        || lower.contains("neural amp")
+        || lower.contains("amp model")
+        || lower.contains("amp capture");
+    let asks_for_discovery = [
+        "find",
+        "search",
+        "browse",
+        "download",
+        "get me",
+        "look up",
+        "lookup",
+        "where can i get",
+        "where do i get",
+        "metallica",
+        "mesa",
+        "marshall",
+        "5150",
+        "soldano",
+        "rectifier",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    mentions_nam_or_amp && asks_for_discovery
+}
+
+fn find_nam_captures(query: &str) -> Result<String, String> {
+    let search_query = format!("{query} Neural Amp Modeler NAM capture download");
+    let url = format!(
+        "https://duckduckgo.com/html/?q={}",
+        url_query_encode(&search_query)
+    );
+    let body = ureq::get(&url)
+        .set("User-Agent", "maqam-live/1.1")
+        .timeout(std::time::Duration::from_secs(20))
+        .call()
+        .map_err(|err| describe_nam_search_error(err, query))?
+        .into_string()
+        .map_err(|err| {
+            format!("NAM search response could not be read: {err}; paste a direct .nam URL and run `nam import URL as name`")
+        })?;
+    let mut results = extract_search_links(&body, 8);
+    let mut direct_links = results
+        .iter()
+        .filter(|result| result.url.to_ascii_lowercase().contains(".nam"))
+        .cloned()
+        .collect::<Vec<_>>();
+    for result in results.iter().take(4) {
+        if direct_links.len() >= 8 || result.url.to_ascii_lowercase().contains(".nam") {
+            continue;
+        }
+        if let Ok(page_links) = fetch_direct_nam_links_from_page(&result.url, 4) {
+            for link in page_links {
+                if !direct_links.iter().any(|existing| existing.url == link.url) {
+                    direct_links.push(link);
+                }
+            }
+        }
+    }
+    if !direct_links.is_empty() {
+        results.splice(0..0, direct_links);
+    }
+    if results.is_empty() {
+        return Ok(format!(
+            "No NAM capture links were found for `{query}`. Try a more specific query such as `Mesa Mark IIC+ NAM`, `5150 NAM`, or paste a direct .nam URL and run `nam import URL as name`."
+        ));
+    }
+    let mut lines = vec![
+        format!("Real search results for `{query}`:"),
+        "Use a direct .nam URL with `nam import URL as name`; if a result is a page, open it and copy the .nam download URL.".to_string(),
+    ];
+    for (idx, result) in results.iter().enumerate() {
+        lines.push(format!("{}. {} — {}", idx + 1, result.title, result.url));
+    }
+    Ok(lines.join("\n"))
+}
+
+fn fetch_direct_nam_links_from_page(url: &str, limit: usize) -> Result<Vec<SearchResult>, String> {
+    let body = ureq::get(url)
+        .set("User-Agent", "maqam-live/1.1")
+        .timeout(std::time::Duration::from_secs(10))
+        .call()
+        .map_err(|err| describe_nam_search_error(err, url))?
+        .into_string()
+        .map_err(|err| format!("NAM result page could not be read: {err}"))?;
+    Ok(extract_direct_nam_links_from_html(&body, url, limit))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SearchResult {
+    title: String,
+    url: String,
+}
+
+fn extract_search_links(html: &str, limit: usize) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    let mut rest = html;
+    while let Some(href_start) = rest.find("href=\"") {
+        rest = &rest[href_start + "href=\"".len()..];
+        let Some(href_end) = rest.find('"') else {
+            break;
+        };
+        let raw_href = &rest[..href_end];
+        rest = &rest[href_end + 1..];
+        let url = normalize_search_href(raw_href);
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            continue;
+        }
+        if results
+            .iter()
+            .any(|result: &SearchResult| result.url == url)
+        {
+            continue;
+        }
+        let title = rest
+            .find('>')
+            .and_then(|start| rest[start + 1..].find("</a>").map(|end| (start, end)))
+            .map(|(start, end)| strip_html_tags(&rest[start + 1..start + 1 + end]))
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| url.clone());
+        if !looks_like_nam_result(&url, &title) {
+            continue;
+        }
+        results.push(SearchResult { title, url });
+        if results.len() >= limit {
+            break;
+        }
+    }
+    results
+}
+
+fn extract_direct_nam_links_from_html(
+    html: &str,
+    base_url: &str,
+    limit: usize,
+) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    let mut rest = html;
+    while let Some(href_start) = rest.find("href=\"") {
+        rest = &rest[href_start + "href=\"".len()..];
+        let Some(href_end) = rest.find('"') else {
+            break;
+        };
+        let raw_href = &rest[..href_end];
+        rest = &rest[href_end + 1..];
+        let Some(url) = resolve_link_url(&html_entity_decode(raw_href), base_url) else {
+            continue;
+        };
+        if !url.to_ascii_lowercase().contains(".nam") {
+            continue;
+        }
+        if results
+            .iter()
+            .any(|result: &SearchResult| result.url == url)
+        {
+            continue;
+        }
+        let title = url
+            .rsplit('/')
+            .next()
+            .map(percent_decode)
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| "NAM download".to_string());
+        results.push(SearchResult { title, url });
+        if results.len() >= limit {
+            break;
+        }
+    }
+    results
+}
+
+fn resolve_link_url(href: &str, base_url: &str) -> Option<String> {
+    if href.starts_with("https://") || href.starts_with("http://") {
+        return Some(href.to_string());
+    }
+    if href.starts_with("//") {
+        return Some(format!("https:{href}"));
+    }
+    if href.starts_with('/') {
+        let (scheme, rest) = base_url.split_once("://")?;
+        let host = rest.split('/').next()?;
+        return Some(format!("{scheme}://{host}{href}"));
+    }
+    None
+}
+
+fn normalize_search_href(raw_href: &str) -> String {
+    let href = html_entity_decode(raw_href);
+    if let Some(query) = href
+        .strip_prefix("//duckduckgo.com/l/?")
+        .or_else(|| href.strip_prefix("https://duckduckgo.com/l/?"))
+        .or_else(|| href.strip_prefix("http://duckduckgo.com/l/?"))
+        .or_else(|| href.strip_prefix("/l/?"))
+    {
+        for part in query.split('&') {
+            if let Some(value) = part.strip_prefix("uddg=") {
+                return percent_decode(value);
+            }
+        }
+    }
+    href
+}
+
+fn looks_like_nam_result(url: &str, title: &str) -> bool {
+    let combined = format!("{url} {title}").to_ascii_lowercase();
+    combined.contains(".nam")
+        || combined.contains("neural amp modeler")
+        || combined.contains("tonehunt")
+        || combined.contains("nam capture")
+}
+
+fn strip_html_tags(input: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    clean_llm_answer(&html_entity_decode(&out))
+}
+
+fn url_query_encode(input: &str) -> String {
+    let mut out = String::new();
+    for byte in input.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else if byte == b' ' {
+            out.push('+');
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(value) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
+                out.push(value);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn html_entity_decode(input: &str) -> String {
+    input
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
+fn describe_nam_search_error(error: ureq::Error, query: &str) -> String {
+    match error {
+        ureq::Error::Status(code, response) => {
+            let body = response.into_string().unwrap_or_default();
+            format!(
+                "NAM search HTTP {code} for `{query}`: {}; try a different query, or paste a direct .nam URL and run `nam import URL as name`",
+                compact_error_body(&body)
+            )
+        }
+        ureq::Error::Transport(error) => {
+            format!(
+                "NAM search failed for `{query}`: {error}; check your network connection, or paste a direct .nam URL and run `nam import URL as name`"
+            )
+        }
+    }
 }
 
 fn split_tool_command(command: &str) -> Vec<String> {
@@ -2812,6 +3572,9 @@ fn is_sym_command_noun(token: &str) -> bool {
 
 fn llm_prompt_is_edit_request(prompt: &str) -> bool {
     let lower = prompt.trim_start().to_ascii_lowercase();
+    if llm_prompt_mentions_nam(&lower) {
+        return false;
+    }
     lower.starts_with("let's ")
         || lower.starts_with("lets ")
         || lower.starts_with("i need ")
@@ -2862,9 +3625,27 @@ fn llm_prompt_is_how_to_action(lower_prompt: &str) -> bool {
         .any(|prefix| lower_prompt.starts_with(prefix))
 }
 
+fn llm_prompt_mentions_nam(lower_prompt: &str) -> bool {
+    lower_prompt.contains("neural amp")
+        || lower_prompt
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .any(|word| word == "nam")
+}
+
+fn llm_rejected_edit_command_message(command_src: &str, cmd: &Cmd) -> String {
+    match cmd {
+        Cmd::SetNam(_) => format!(
+            "✗ LLM returned `{command_src}`, but NAM is live input state, not a score edit; import a real .nam file with `nam import FILENAME.nam as name`, then run `nam name` yourself"
+        ),
+        _ => format!(
+            "✗ LLM returned `{command_src}`, but LLM edits cannot run save/load/playback/system commands; ask it for score-edit commands only"
+        ),
+    }
+}
+
 fn llm_edit_prompt(user_prompt: &str) -> String {
     format!(
-        "User wants this edit:\n{user_prompt}\n\nThis is an action request: make the change with the apply_maqam_commands tool instead of explaining how the user could do it. Use the current score from the system prompt as context. Return only new maqam-live commands to apply the edit, separated by newlines or semicolons. Never concatenate two commands without a separator; use `sym on; sym decay 0.999 drive 2`, not `sym on sym decay 0.999 drive 2`. Do not include existing score lines, ids, markdown, bullets, explanations, or comments. Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, or clear commands."
+        "User wants this edit:\n{user_prompt}\n\nThis is an action request: make the change with the apply_maqam_commands tool instead of explaining how the user could do it. Use the current score from the system prompt as context. Return only new maqam-live commands to apply the edit, separated by newlines or semicolons. Never concatenate two commands without a separator; use `sym on; sym decay 0.999 drive 2`, not `sym on sym decay 0.999 drive 2`. Do not include existing score lines, ids, markdown, bullets, explanations, or comments. Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, nam, or clear commands."
     )
 }
 
@@ -3008,6 +3789,271 @@ fn phrase_source_with_repeat(source: &str, repeat: usize) -> String {
     format!("{trimmed} r{}", repeat.max(1))
 }
 
+fn nam_cache_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("MAQAM_NAM_CACHE_DIR") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from(".nam")
+}
+
+fn is_http_url(value: &str) -> bool {
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
+fn resolve_nam_model_path(value: &str) -> Result<PathBuf, String> {
+    let direct = PathBuf::from(value);
+    if direct.is_file() {
+        return cache_nam_model_file(&direct);
+    }
+    let cache_dir = nam_cache_dir();
+    let cached = if value.ends_with(".nam") {
+        cache_dir.join(value)
+    } else {
+        cache_dir.join(format!("{value}.nam"))
+    };
+    if cached.is_file() {
+        return Ok(cached);
+    }
+    Err(format!(
+        "NAM model `{value}` not found as a file or cached capture in ./.nam; run `nam import URL as {}` to download into ./.nam, or `nam import FILENAME.nam as {}` for a real local file",
+        sanitize_nam_cache_name(value),
+        sanitize_nam_cache_name(value)
+    ))
+}
+
+fn cache_nam_model_file(source: &Path) -> Result<PathBuf, String> {
+    let cache_dir = nam_cache_dir();
+    fs::create_dir_all(&cache_dir).map_err(|err| {
+        format!(
+            "cannot create NAM cache {}: {err}; create ./.nam or set MAQAM_NAM_CACHE_DIR to a writable directory",
+            cache_dir.display()
+        )
+    })?;
+    let cache_name = nam_cache_name_from_path(source);
+    let dest = cache_dir.join(format!("{cache_name}.nam"));
+    if source == dest {
+        return Ok(dest);
+    }
+    fs::copy(source, &dest).map_err(|err| {
+        format!(
+            "cannot cache NAM model in {}: {err}; check file permissions on ./.nam or set MAQAM_NAM_CACHE_DIR",
+            dest.display()
+        )
+    })?;
+    Ok(dest)
+}
+
+fn download_nam_capture(
+    url: &str,
+    cache_dir: &Path,
+    cache_name: &str,
+    load_after: bool,
+    tx: crossbeam_channel::Sender<Result<NamDownloadEvent, String>>,
+) -> Result<(), String> {
+    fs::create_dir_all(cache_dir).map_err(|err| {
+        format!(
+            "cannot create NAM cache {}: {err}; create ./.nam or set MAQAM_NAM_CACHE_DIR to a writable directory",
+            cache_dir.display()
+        )
+    })?;
+    let dest = cache_dir.join(format!("{cache_name}.nam"));
+    let partial = cache_dir.join(format!("{cache_name}.nam.part"));
+    let response = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(120))
+        .call()
+        .map_err(|err| {
+            format!(
+                "NAM download failed from {url}: {}; check the URL, network connection, or download the .nam file manually and run `nam import FILENAME.nam as {cache_name}`",
+                describe_http_error(err)
+            )
+        })?;
+    let total = response
+        .header("Content-Length")
+        .and_then(|value| value.parse::<u64>().ok());
+    let mut reader = response.into_reader();
+    let mut file = fs::File::create(&partial).map_err(|err| {
+        format!(
+            "cannot write NAM download {}: {err}; check file permissions on ./.nam or set MAQAM_NAM_CACHE_DIR",
+            partial.display()
+        )
+    })?;
+    let mut downloaded = 0_u64;
+    let mut buf = [0_u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(|err| {
+            let _ = fs::remove_file(&partial);
+            format!(
+                "NAM download read failed from {url}: {err}; check your network connection and try again"
+            )
+        })?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n]).map_err(|err| {
+            let _ = fs::remove_file(&partial);
+            format!(
+                "cannot write NAM download {}: {err}; check file permissions on ./.nam or set MAQAM_NAM_CACHE_DIR",
+                partial.display()
+            )
+        })?;
+        downloaded += n as u64;
+        let _ = tx.send(Ok(NamDownloadEvent::Progress { downloaded, total }));
+    }
+    file.flush().map_err(|err| {
+        let _ = fs::remove_file(&partial);
+        format!(
+            "cannot finish NAM download {}: {err}; check file permissions on ./.nam or set MAQAM_NAM_CACHE_DIR",
+            partial.display()
+        )
+    })?;
+    fs::rename(&partial, &dest).map_err(|err| {
+        let _ = fs::remove_file(&partial);
+        format!(
+            "cannot move NAM download into {}: {err}; check file permissions on ./.nam or set MAQAM_NAM_CACHE_DIR",
+            dest.display()
+        )
+    })?;
+    let _ = tx.send(Ok(NamDownloadEvent::Done {
+        name: cache_name.to_string(),
+        load_after,
+    }));
+    Ok(())
+}
+
+fn nam_session_audio_cmd(command: NamCommand) -> Result<AudioCmd, String> {
+    match command {
+        NamCommand::Load { path } => nam_load_audio_cmd(&path).map(|(cmd, _message)| cmd),
+        NamCommand::Off => Ok(AudioCmd::SetNamModel(None)),
+        NamCommand::Gain(gain) => Ok(AudioCmd::SetNamGain(gain)),
+        NamCommand::Import { .. } | NamCommand::List => Err(
+            "NAM lines in .mq files can load, bypass, or set gain only; run import/list interactively"
+                .into(),
+        ),
+    }
+}
+
+fn nam_command_src(command: &NamCommand) -> Option<String> {
+    match command {
+        NamCommand::Load { path } => Some(format!("nam {path}")),
+        NamCommand::Off => Some("nam off".to_string()),
+        NamCommand::Gain(gain) => Some(format!("nam gain {gain}")),
+        NamCommand::Import { .. } | NamCommand::List => None,
+    }
+}
+
+fn replace_live_nam_command(commands: &mut Vec<String>, src: Option<String>) {
+    let Some(src) = src else {
+        return;
+    };
+    let is_gain = src.starts_with("nam gain ");
+    let is_state = src == "nam off" || (!is_gain && src.starts_with("nam "));
+    if let Some(existing) = commands.iter_mut().find(|command| {
+        if is_gain {
+            command.starts_with("nam gain ")
+        } else if is_state {
+            *command == "nam off"
+                || (!command.starts_with("nam gain ") && command.starts_with("nam "))
+        } else {
+            false
+        }
+    }) {
+        *existing = src;
+        return;
+    }
+    commands.push(src);
+}
+
+fn nam_load_audio_cmd(value: &str) -> Result<(AudioCmd, String), String> {
+    let model_path = resolve_nam_model_path(value)?;
+    let loaded = nam_rs::NamModel::from_file(&model_path)
+        .and_then(|model| {
+            let expected_sr = model.expected_sample_rate();
+            nam_rs::Model::from_nam(&model).map(|runtime| (runtime, expected_sr))
+        })
+        .map_err(|err| {
+            format!(
+                "NAM could not load {}: {err}; use a supported A1/A2 .nam file",
+                model_path.display()
+            )
+        })?;
+    let (runtime, expected_sr) = loaded;
+    Ok((
+        AudioCmd::SetNamModel(Some(runtime)),
+        format!(
+            "NAM input amp loaded ← {} ({expected_sr} Hz model; set your audio device to that rate if it sounds wrong)",
+            model_path.display()
+        ),
+    ))
+}
+
+fn list_cached_nam_models(cache_dir: &Path) -> Result<Vec<String>, String> {
+    if !cache_dir.exists() {
+        fs::create_dir_all(cache_dir).map_err(|err| err.to_string())?;
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for entry in fs::read_dir(cache_dir).map_err(|err| err.to_string())? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("nam") {
+            continue;
+        }
+        if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+            names.push(stem.to_string());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+fn list_current_dir_nam_files() -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    for entry in fs::read_dir(".").map_err(|err| err.to_string())? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("nam") {
+            continue;
+        }
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            names.push(name.to_string());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+fn nam_cache_name_from_path(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(sanitize_nam_cache_name)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "model".into())
+}
+
+fn nam_cache_name_from_url(url: &str) -> String {
+    let without_fragment = url.split('#').next().unwrap_or(url);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment)
+        .trim_end_matches('/');
+    let filename = without_query.rsplit('/').next().unwrap_or(without_query);
+    let stem = filename.strip_suffix(".nam").unwrap_or(filename);
+    sanitize_nam_cache_name(stem)
+}
+
+fn sanitize_nam_cache_name(name: &str) -> String {
+    let mut out = String::new();
+    for ch in name.trim().chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+        } else if ch.is_whitespace() {
+            out.push('-');
+        }
+    }
+    out.trim_matches('.').trim_matches('-').to_string()
+}
+
 fn llm_edit_command_consumes_timeline_id(cmd: &Cmd) -> bool {
     matches!(
         cmd,
@@ -3037,7 +4083,7 @@ fn llm_edit_command_consumes_timeline_id(cmd: &Cmd) -> bool {
 
 fn llm_system_prompt(score_context: &str) -> String {
     format!(
-        "You help with maqam-live, a terminal live-coding sequencer.\n\n{}\nCurrent score context:\n{}\n\nLLM behavior:\n- The request includes the current score plus prior user prompts and prior assistant answers/tool-command results; use that continuity.\n- For questions, answer concisely and prefer exact commands.\n- For edit requests, use the apply_maqam_commands tool with valid commands only.\n- Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, clear, vol, or tuneto commands.",
+        "You help with maqam-live, a terminal live-coding sequencer.\n\n{}\nCurrent score context:\n{}\n\nLLM behavior:\n- The request includes the current score plus prior user prompts and prior assistant answers/tool-command results; use that continuity.\n- For questions, answer concisely and prefer exact commands.\n- When the user asks to find, browse, or download a NAM capture or amp model, use the find_nam_captures tool; never claim you cannot browse, and never invent URLs or fake local paths.\n- For direct .nam URLs found by the tool, suggest `nam import URL as name` or `nam URL`; for result pages, tell the user to open the page and copy the .nam download URL.\n- For edit requests, use the apply_maqam_commands tool with valid commands only.\n- Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, clear, vol, tuneto, or nam commands.",
         command::language_reference(),
         score_context
     )
@@ -4079,6 +5125,106 @@ mod tests {
     }
 
     #[test]
+    fn nam_input_commands_parse_as_live_state() {
+        assert!(matches!(
+            command::parse("nam off").unwrap(),
+            Cmd::SetNam(NamCommand::Off)
+        ));
+        assert!(matches!(
+            command::parse("nam ls").unwrap(),
+            Cmd::SetNam(NamCommand::List)
+        ));
+        assert!(matches!(
+            command::parse("nam gain 1.5").unwrap(),
+            Cmd::SetNam(NamCommand::Gain(gain)) if (gain - 1.5).abs() < f32::EPSILON
+        ));
+        let parsed = command::parse("nam import metallica.nam as metallica").unwrap();
+        let Cmd::SetNam(NamCommand::Import { path, name }) = parsed else {
+            panic!("expected NAM import command");
+        };
+        assert_eq!(path, "metallica.nam");
+        assert_eq!(name.as_deref(), Some("metallica"));
+        let parsed = command::parse("nam metallica").unwrap();
+        let Cmd::SetNam(NamCommand::Load { path }) = parsed else {
+            panic!("expected NAM load command");
+        };
+        assert_eq!(path, "metallica");
+        assert!(command::parse("nam gain 12").is_err());
+    }
+
+    #[test]
+    fn nam_cache_names_are_shell_friendly() {
+        assert_eq!(sanitize_nam_cache_name("Metallica A2"), "Metallica-A2");
+        assert_eq!(sanitize_nam_cache_name("../bad name!!"), "bad-name");
+        assert_eq!(
+            nam_cache_name_from_path(Path::new("mesa dual rect.nam")),
+            "mesa-dual-rect"
+        );
+        assert_eq!(
+            nam_cache_name_from_url("https://example.test/models/NAM%20A2.nam?download=1"),
+            "NAM20A2"
+        );
+        assert_eq!(
+            nam_cache_name_from_url("https://example.test/models/"),
+            "models"
+        );
+    }
+
+    #[test]
+    fn listing_nam_cache_creates_missing_cache_dir() {
+        let _guard = session_test_lock();
+        let old_cache = std::env::var("MAQAM_NAM_CACHE_DIR").ok();
+        let dir = std::env::temp_dir().join(format!(
+            "maqam-nam-cache-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::env::set_var("MAQAM_NAM_CACHE_DIR", &dir);
+
+        let names = list_cached_nam_models(&nam_cache_dir()).unwrap();
+
+        assert!(names.is_empty());
+        assert!(dir.is_dir());
+        let _ = fs::remove_dir(&dir);
+        match old_cache {
+            Some(value) => std::env::set_var("MAQAM_NAM_CACHE_DIR", value),
+            None => std::env::remove_var("MAQAM_NAM_CACHE_DIR"),
+        }
+    }
+
+    #[test]
+    fn missing_nam_live_state_does_not_block_session_load() {
+        let _guard = session_test_lock();
+        let old_cache_dir = std::env::var("MAQAM_NAM_CACHE_DIR").ok();
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let cache_dir = std::env::temp_dir().join(format!("maqam-empty-nam-cache-{suffix}"));
+        std::env::set_var("MAQAM_NAM_CACHE_DIR", &cache_dir);
+
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+        app.load_session_v3(["nam practice", "P|0|1|d bayati 4444"].into_iter())
+            .unwrap();
+        assert_eq!(app.live_nam_commands, vec!["nam practice"]);
+        assert_eq!(app.phrases.len(), 1);
+        assert_eq!(app.phrases[0].src, "d bayati 4444");
+        assert!(app.message.as_deref().is_some_and(|message| {
+            message.contains("loaded session; NAM not loaded") && message.contains("practice")
+        }));
+
+        let _ = fs::remove_dir_all(&cache_dir);
+        if let Some(path) = old_cache_dir {
+            std::env::set_var("MAQAM_NAM_CACHE_DIR", path);
+        } else {
+            std::env::remove_var("MAQAM_NAM_CACHE_DIR");
+        }
+    }
+
+    #[test]
     fn loads_and_saves_v3_without_rewriting_input() {
         let _guard = session_test_lock();
         let suffix = SystemTime::now()
@@ -4602,6 +5748,8 @@ mod tests {
         ));
         assert!(llm_prompt_is_edit_request("add in sympathetics"));
         assert!(llm_prompt_is_edit_request("how do i get sympathetics?"));
+        assert!(!llm_prompt_is_edit_request("can i have NAM A2?"));
+        assert!(!llm_prompt_is_edit_request("add NAM A2 on input"));
         assert!(!llm_prompt_is_edit_request(
             "what are the valid values for sym decay?"
         ));
@@ -4645,6 +5793,19 @@ mod tests {
             commands,
             vec!["e minor 332", "d major 332332", "save default.mq"]
         );
+    }
+
+    #[test]
+    fn llm_edit_commands_reject_nam_as_live_state() {
+        let commands = vec!["nam load metallica".to_string()];
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+        app.apply_llm_edit_commands(commands);
+        assert!(app.phrases.is_empty());
+        assert!(app.message.as_deref().is_some_and(|message| {
+            message.contains("NAM is live input state")
+                && message.contains("nam import FILENAME.nam as name")
+        }));
     }
 
     #[test]
@@ -4758,6 +5919,89 @@ mod tests {
             anthropic[2].pointer("/content").and_then(|v| v.as_str()),
             Some("next question")
         );
+    }
+
+    #[test]
+    fn llm_answer_cleanup_preserves_response_lines() {
+        assert_eq!(
+            clean_llm_answer(" first   line\n\n second   line "),
+            "first line\nsecond line"
+        );
+    }
+
+    #[test]
+    fn nam_search_helpers_extract_real_links() {
+        let html = r#"
+            <a class="result__a" href="/l/?uddg=https%3A%2F%2Ftonehunt.org%2Fmodels%2Fabc&amp;rut=x">
+                Metallica NAM capture
+            </a>
+            <a href="https://example.com/manual">Ignore me</a>
+            <a href="https://example.com/model.nam">Direct NAM</a>
+        "#;
+
+        let links = extract_search_links(html, 8);
+
+        assert_eq!(
+            links,
+            vec![
+                SearchResult {
+                    title: "Metallica NAM capture".into(),
+                    url: "https://tonehunt.org/models/abc".into(),
+                },
+                SearchResult {
+                    title: "Direct NAM".into(),
+                    url: "https://example.com/model.nam".into(),
+                },
+            ]
+        );
+        assert_eq!(
+            url_query_encode("Metallica Mark IIC+ NAM"),
+            "Metallica+Mark+IIC%2B+NAM"
+        );
+    }
+
+    #[test]
+    fn nam_search_extracts_direct_links_from_result_pages() {
+        let html = r#"
+            <a href="/downloads/mesa.nam">Mesa</a>
+            <a href="//cdn.example.test/amps/5150.nam?download=1">5150</a>
+        "#;
+
+        let links = extract_direct_nam_links_from_html(html, "https://example.test/models/abc", 8);
+
+        assert_eq!(
+            links,
+            vec![
+                SearchResult {
+                    title: "mesa.nam".into(),
+                    url: "https://example.test/downloads/mesa.nam".into(),
+                },
+                SearchResult {
+                    title: "5150.nam?download=1".into(),
+                    url: "https://cdn.example.test/amps/5150.nam?download=1".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn nam_research_is_automatic_for_amp_discovery_prompts() {
+        assert!(llm_prompt_needs_nam_research(
+            "find me a Metallica NAM amp capture"
+        ));
+        assert!(llm_prompt_needs_nam_research(
+            "where can i get a Mesa amp model?"
+        ));
+        assert!(!llm_prompt_needs_nam_research("how do i turn NAM off?"));
+        assert!(!llm_prompt_needs_nam_research("how do i set vcf mic?"));
+    }
+
+    #[test]
+    fn nam_tool_requires_a_query() {
+        let err = execute_llm_tool("find_nam_captures", &serde_json::json!({}))
+            .expect_err("missing query should be rejected before network access");
+
+        assert!(err.contains("needs a non-empty query"));
     }
 
     #[test]

@@ -408,6 +408,8 @@ pub enum AudioCmd {
     SetVcfBank(VcfBank),
     SetFx(FxChange),
     SetFxSettings(FxSettings),
+    SetNamModel(Option<nam_rs::Model>),
+    SetNamGain(f32),
     Clear,
     SetVol(f32),
     SetPaused(bool),

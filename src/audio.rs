@@ -429,6 +429,8 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
     let mut sympathetics_enabled = false;
     let mut sympathetics = SympatheticBank::new(sr as f32);
     let mut sympathetic_phrase_id = None;
+    let mut nam_model: Option<nam_rs::Model> = None;
+    let mut nam_gain = 1.0f32;
 
     let stream = device.build_output_stream(
         &cfg.into(),
@@ -477,6 +479,12 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                             fx = setting;
                             fx_processor.set_settings(setting);
                         }
+                    }
+                    AudioCmd::SetNamModel(model) => {
+                        nam_model = model;
+                    }
+                    AudioCmd::SetNamGain(gain) => {
+                        nam_gain = gain.clamp(0.0, 8.0);
                     }
                     AudioCmd::SetVol(v) => {
                         vol = v;
@@ -702,7 +710,10 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 }
 
                 voices.retain(|v| !v.done);
-                let live_input = input_rx.try_recv().unwrap_or(0.0);
+                let mut live_input = input_rx.try_recv().unwrap_or(0.0);
+                if let Some(model) = nam_model.as_mut() {
+                    live_input = model.process_sample(live_input * nam_gain);
+                }
                 if voices.is_empty()
                     && !fx.active()
                     && !sympathetics_enabled

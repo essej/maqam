@@ -107,6 +107,7 @@ Pure parser and value-change logic. It parses:
 - `bpm`, `s`/`sus`, `vol`
 - VCF/VCO commands
 - sympathetic string commands
+- live input NAM commands
 - reverb, delay, pingpong, and `fx off`
 - session commands
 - live globals commands such as `vol` and `tuneto`
@@ -128,6 +129,17 @@ Tick(f64)
 single `VcfSettings` for the target slot. `apply_fx_change` applies `FxChange`
 against `FxSettings`. Sympathetic changes cover enable/disable, decay, drive,
 per-source partition settings, interval shifts, and weighted JI harmony splits.
+
+`nam FILENAME.nam` copies a Neural Amp Modeler A1/A2 capture into the local
+cache and loads it; `nam import FILENAME.nam as name` imports explicitly;
+`nam import https://.../amp.nam as amp` downloads into the cache with progress;
+and `nam <name>` loads a cached capture on live mic input. `nam https://...`
+downloads, caches, and loads. NAM is live state, not score state, and is not
+written back to `.mq` files. The NAM stage runs before `vcf mic` and before the
+final `vcf all` master filter. The cache lives in `./.nam` unless
+`MAQAM_NAM_CACHE_DIR` is set, and the directory is created automatically. The
+host currently does not resample for NAM; use a model whose expected sample
+rate matches the audio device if the tone sounds wrong.
 
 ### `src/sequencer.rs`
 
@@ -357,5 +369,6 @@ user what to do.
 | `crossbeam-channel` | app-to-audio command channel |
 | `anyhow` | top-level error handling |
 | `contracts` | debug-build precondition/postcondition annotations |
+| `nam-rs` | pure-Rust Neural Amp Modeler A1/A2 inference |
 
 Rust edition is 2021. The toolchain is pinned by `rust-toolchain.toml`.

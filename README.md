@@ -53,6 +53,7 @@ chatgpt: what are the valid values for sym decay?
 chatgpt: how do i set a vcf filter on the instrument only?
 claude: how do i get sympathetics?
 claude: what should i type to turn off the bass vcf?
+chatgpt: find me a Metallica NAM amp capture
 chatgpt: let's do an e minor that does a d major hemiola turnaround
 ```
 
@@ -74,6 +75,11 @@ the help overlay.
 
 If the API key is missing, maqam-live tells you exactly which environment
 variable to set before trying again.
+
+For NAM amp/capture discovery requests, maqam-live runs its web lookup tool
+before asking the LLM, then the LLM explains the real result links or direct
+`nam import URL as name` commands. Use `PageUp` and `PageDown` to scroll longer
+responses in the TUI.
 
 LLM edits must begin with `chatgpt:` or `claude:`. When the prompt is an edit
 request, maqam-live uses tool calling to get a structured command list, checks
@@ -244,10 +250,29 @@ sym harmony root 0.50 third 0.25 fifth 0.25
 sym <mic|kanun|bass|drums> decay <n> drive <n> amount <n>
                    per-source sympathetic partition settings
 vcf sym ...        filter the sympathetic-string instrument bus
+nam import metallica.nam as metallica
+                   cache a Neural Amp Modeler A1/A2 capture
+nam import https://example.com/amp.nam as amp
+                   download a capture into ./.nam with a progress meter
+nam metallica.nam cache and load a NAM capture from the current directory
+nam https://example.com/amp.nam
+                   download, cache, and load a NAM capture
+nam <name>         load a cached NAM capture on live mic input
+nam ls            list cached NAM captures and current-directory .nam files
+nam gain <n>      set NAM input gain before the amp model (0..8)
+nam off           bypass the live-input NAM model
 q / quit           quit
 ? / help           show help
+PageUp/PageDown    scroll the response pane
 ;                  separate multiple commands on one line
 ```
+
+NAM is live input state, not score state, so it is not saved in `.mq` files.
+The input chain is mic input -> NAM -> `vcf mic` or `vcf all`. Referenced
+captures are cached in `./.nam` by default, or in `MAQAM_NAM_CACHE_DIR` when
+set. The cache directory is created automatically when listing, importing, or
+downloading captures. NAM models have an expected sample rate; set your audio
+device to that rate if the model sounds wrong.
 
 ### Settings Entries
 

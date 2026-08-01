@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame, Terminal,
 };
 use std::io;
@@ -93,6 +93,7 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
                         app.history_push(&cmd);
                         app.input.clear();
                         app.cursor_pos = 0;
+                        app.message_scroll_home();
                         app.handle_command(&cmd);
                     }
                     KeyCode::Up => {
@@ -112,6 +113,12 @@ pub fn run(app: &mut App) -> anyhow::Result<()> {
                     }
                     KeyCode::End => {
                         app.cursor_end();
+                    }
+                    KeyCode::PageUp => {
+                        app.message_scroll_up();
+                    }
+                    KeyCode::PageDown => {
+                        app.message_scroll_down();
                     }
                     KeyCode::Tab => {
                         app.complete_input();
@@ -168,7 +175,7 @@ fn draw(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Min(3),
             Constraint::Length(3),
-            Constraint::Length(1),
+            Constraint::Length(4),
             Constraint::Length(1),
         ])
         .split(area);
@@ -239,181 +246,118 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             width.max(format!("[{total}/{total}]").len())
         });
 
-    let items: Vec<ListItem> = app
-        .phrases
+    let mut items: Vec<ListItem> = app
+        .live_nam_commands
         .iter()
-        .enumerate()
-        .map(|(idx, phrase)| {
-            let playing = idx == cur % n;
-            let is_up_next = show_prediction && !playing && idx == next;
-            let is_next_different = show_prediction && !playing && idx == exit;
-            let state_color = if playing {
-                CURRENT_GREEN
-            } else if is_up_next {
-                NEXT_BLUE
-            } else if is_next_different {
-                NEXT_DIFFERENT_BLUE
-            } else {
-                INACTIVE_GRAY
-            };
-            let jump_prefix: Vec<Span> = jumpbacks
-                .iter()
-                .map(|&(target, source, jump_id, times)| {
-                    let on_path = target.min(source) <= idx && idx <= target.max(source);
-                    if !on_path {
-                        return Span::styled("    ", Style::default().fg(INACTIVE_GRAY).bg(BG));
-                    }
-                    let value = live_jump_counters.get(&jump_id).copied().unwrap_or(0);
-                    let will_jump = Some(source) == upcoming_jump_source
-                        && value.saturating_add(1) < times.max(1);
-                    // The source endpoint describes the immediate transition,
-                    // so do not fill it while the current phrase still has
-                    // another local repeat to play.  Paused score prediction
-                    // may still color the destination, but `●` is reserved for
-                    // the iteration which will actually leave the phrase.
-                    let leaves_current_phrase = current_is_last_repeat;
-                    let (glyph, color) = if idx == target {
-                        (
-                            if target < source {
-                                "┌──>"
-                            } else {
-                                "└──>"
-                            },
-                            if will_jump {
-                                NEXT_DIFFERENT_BLUE
-                            } else {
-                                INACTIVE_GRAY
-                            },
-                        )
-                    } else if idx == source && will_jump && leaves_current_phrase {
-                        ("●   ", NEXT_BLUE)
-                    } else {
-                        ("│   ", INACTIVE_GRAY)
-                    };
-                    Span::styled(glyph, Style::default().fg(color).bg(BG))
-                })
-                .collect();
-            let id_str = format!("{:>3}: ", phrase.id);
-            let marker = if playing {
-                "▶ "
-            } else if is_up_next {
-                "▸ "
-            } else if is_next_different {
-                if current_is_last_repeat {
-                    "▷ "
-                } else {
-                    "◇ "
+        .map(|command| {
+            ListItem::new(Line::from(vec![
+                Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
+                Span::styled("     ", Style::default().fg(DIM).bg(BG)),
+                Span::styled("· ", Style::default().fg(DIM).bg(BG)),
+                Span::styled(
+                    "    ".repeat(jumpbacks.len()),
+                    Style::default().fg(DIM).bg(BG),
+                ),
+                Span::styled(
+                    format!("{:<status_width$} ", "[live]"),
+                    Style::default().fg(DIM).bg(BG),
+                ),
+                Span::styled(
+                    command.clone(),
+                    Style::default().fg(DIM).bg(BG).add_modifier(Modifier::BOLD),
+                ),
+            ]))
+        })
+        .collect();
+
+    items.extend(app.phrases.iter().enumerate().map(|(idx, phrase)| {
+        let playing = idx == cur % n;
+        let is_up_next = show_prediction && !playing && idx == next;
+        let is_next_different = show_prediction && !playing && idx == exit;
+        let state_color = if playing {
+            CURRENT_GREEN
+        } else if is_up_next {
+            NEXT_BLUE
+        } else if is_next_different {
+            NEXT_DIFFERENT_BLUE
+        } else {
+            INACTIVE_GRAY
+        };
+        let jump_prefix: Vec<Span> = jumpbacks
+            .iter()
+            .map(|&(target, source, jump_id, times)| {
+                let on_path = target.min(source) <= idx && idx <= target.max(source);
+                if !on_path {
+                    return Span::styled("    ", Style::default().fg(INACTIVE_GRAY).bg(BG));
                 }
+                let value = live_jump_counters.get(&jump_id).copied().unwrap_or(0);
+                let will_jump =
+                    Some(source) == upcoming_jump_source && value.saturating_add(1) < times.max(1);
+                // The source endpoint describes the immediate transition,
+                // so do not fill it while the current phrase still has
+                // another local repeat to play.  Paused score prediction
+                // may still color the destination, but `●` is reserved for
+                // the iteration which will actually leave the phrase.
+                let leaves_current_phrase = current_is_last_repeat;
+                let (glyph, color) = if idx == target {
+                    (
+                        if target < source {
+                            "┌──>"
+                        } else {
+                            "└──>"
+                        },
+                        if will_jump {
+                            NEXT_DIFFERENT_BLUE
+                        } else {
+                            INACTIVE_GRAY
+                        },
+                    )
+                } else if idx == source && will_jump && leaves_current_phrase {
+                    ("●   ", NEXT_BLUE)
+                } else {
+                    ("│   ", INACTIVE_GRAY)
+                };
+                Span::styled(glyph, Style::default().fg(color).bg(BG))
+            })
+            .collect();
+        let id_str = format!("{:>3}: ", phrase.id);
+        let marker = if playing {
+            "▶ "
+        } else if is_up_next {
+            "▸ "
+        } else if is_next_different {
+            if current_is_last_repeat {
+                "▷ "
             } else {
-                "· "
-            };
-            // Jump entries — show live counter for every jump, not just the playing one
-            if let Some(ref js) = phrase.jump {
-                let valid_target = app.phrases.iter().any(|p| p.id == js.target_id);
-                // Read counter from the shared map (written by audio thread)
-                let pass = live_jump_counters.get(&phrase.id).copied().unwrap_or(0);
-                let total = js.times;
-                let displayed_pass = pass.saturating_add(1).min(total.max(1));
-                let counter = format!("{:<status_width$} ", format!("[{displayed_pass}/{total}]"));
-
-                let col_src = if !valid_target {
-                    Color::Rgb(255, 80, 80)
-                } else {
-                    state_color
-                };
-                let col_ctr = if !valid_target {
-                    Color::Rgb(255, 120, 120)
-                } else {
-                    state_color
-                };
-                let err = if valid_target {
-                    ""
-                } else {
-                    "  [missing target]"
-                };
-                let mut spans = vec![
-                    Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
-                    Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
-                    Span::styled(
-                        marker,
-                        Style::default()
-                            .fg(state_color)
-                            .bg(BG)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ];
-                spans.extend(jump_prefix.clone());
-                spans.extend(vec![
-                    Span::styled(
-                        counter,
-                        Style::default()
-                            .fg(col_ctr)
-                            .bg(BG)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        phrase.display_src(),
-                        Style::default()
-                            .fg(col_src)
-                            .bg(BG)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        err,
-                        Style::default()
-                            .fg(Color::Rgb(255, 100, 100))
-                            .bg(BG)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]);
-                return ListItem::new(Line::from(spans));
+                "◇ "
             }
+        } else {
+            "· "
+        };
+        // Jump entries — show live counter for every jump, not just the playing one
+        if let Some(ref js) = phrase.jump {
+            let valid_target = app.phrases.iter().any(|p| p.id == js.target_id);
+            // Read counter from the shared map (written by audio thread)
+            let pass = live_jump_counters.get(&phrase.id).copied().unwrap_or(0);
+            let total = js.times;
+            let displayed_pass = pass.saturating_add(1).min(total.max(1));
+            let counter = format!("{:<status_width$} ", format!("[{displayed_pass}/{total}]"));
 
-            if phrase.control.is_some() {
-                let status = if matches!(phrase.control, Some(crate::sequencer::ControlSpec::Stop))
-                {
-                    "[stop]"
-                } else {
-                    "[settings]"
-                };
-                let mut spans = vec![
-                    Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
-                    Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
-                    Span::styled(
-                        marker,
-                        Style::default()
-                            .fg(state_color)
-                            .bg(BG)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ];
-                spans.extend(jump_prefix.clone());
-                spans.extend(vec![
-                    Span::styled(
-                        format!("{status:<status_width$} "),
-                        Style::default().fg(state_color).bg(BG),
-                    ),
-                    Span::styled(
-                        phrase.display_src(),
-                        Style::default()
-                            .fg(state_color)
-                            .bg(BG)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]);
-                return ListItem::new(Line::from(spans));
-            }
-
-            let src_str = format!("{:<28}", phrase.display_src());
-            let ratios = phrase.pitch_ratios_display();
-            let rhythm = phrase.rhythm_display();
-            let total_plays = phrase.repeat.max(1);
-            let displayed_play = if playing {
-                cur_plays.saturating_add(1).min(total_plays)
+            let col_src = if !valid_target {
+                Color::Rgb(255, 80, 80)
             } else {
-                1
+                state_color
             };
-
+            let col_ctr = if !valid_target {
+                Color::Rgb(255, 120, 120)
+            } else {
+                state_color
+            };
+            let err = if valid_target {
+                ""
+            } else {
+                "  [missing target]"
+            };
             let mut spans = vec![
                 Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
                 Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
@@ -425,42 +369,123 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         .add_modifier(Modifier::BOLD),
                 ),
             ];
-            spans.extend(jump_prefix);
+            spans.extend(jump_prefix.clone());
             spans.extend(vec![
                 Span::styled(
-                    format!(
-                        "{:<status_width$} ",
-                        format!("[{displayed_play}/{total_plays}]")
-                    ),
+                    counter,
+                    Style::default()
+                        .fg(col_ctr)
+                        .bg(BG)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    phrase.display_src(),
+                    Style::default()
+                        .fg(col_src)
+                        .bg(BG)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    err,
+                    Style::default()
+                        .fg(Color::Rgb(255, 100, 100))
+                        .bg(BG)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]);
+            return ListItem::new(Line::from(spans));
+        }
+
+        if phrase.control.is_some() {
+            let status = if matches!(phrase.control, Some(crate::sequencer::ControlSpec::Stop)) {
+                "[stop]"
+            } else {
+                "[settings]"
+            };
+            let mut spans = vec![
+                Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
+                Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
+                Span::styled(
+                    marker,
                     Style::default()
                         .fg(state_color)
                         .bg(BG)
-                        .add_modifier(if playing {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(src_str, Style::default().fg(state_color).bg(BG)),
-                Span::raw(" "),
+            ];
+            spans.extend(jump_prefix.clone());
+            spans.extend(vec![
+                Span::styled(
+                    format!("{status:<status_width$} "),
+                    Style::default().fg(state_color).bg(BG),
+                ),
+                Span::styled(
+                    phrase.display_src(),
+                    Style::default()
+                        .fg(state_color)
+                        .bg(BG)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]);
+            return ListItem::new(Line::from(spans));
+        }
 
-            for (si, ch) in rhythm.chars().enumerate() {
-                let is_now = !app.paused && playing && si == cur_sub;
-                let mut sty = Style::default().fg(state_color).bg(BG);
-                if is_now {
-                    sty = sty.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
-                }
-                spans.push(Span::styled(ch.to_string(), sty));
-            }
-            if !ratios.is_empty() {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(ratios, Style::default().fg(DIM).bg(BG)));
-            }
+        let src_str = format!("{:<28}", phrase.display_src());
+        let ratios = phrase.pitch_ratios_display();
+        let rhythm = phrase.rhythm_display();
+        let total_plays = phrase.repeat.max(1);
+        let displayed_play = if playing {
+            cur_plays.saturating_add(1).min(total_plays)
+        } else {
+            1
+        };
 
-            ListItem::new(Line::from(spans))
-        })
-        .collect();
+        let mut spans = vec![
+            Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
+            Span::styled(id_str, Style::default().fg(state_color).bg(BG)),
+            Span::styled(
+                marker,
+                Style::default()
+                    .fg(state_color)
+                    .bg(BG)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+        spans.extend(jump_prefix);
+        spans.extend(vec![
+            Span::styled(
+                format!(
+                    "{:<status_width$} ",
+                    format!("[{displayed_play}/{total_plays}]")
+                ),
+                Style::default()
+                    .fg(state_color)
+                    .bg(BG)
+                    .add_modifier(if playing {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+            Span::styled(src_str, Style::default().fg(state_color).bg(BG)),
+            Span::raw(" "),
+        ]);
+
+        for (si, ch) in rhythm.chars().enumerate() {
+            let is_now = !app.paused && playing && si == cur_sub;
+            let mut sty = Style::default().fg(state_color).bg(BG);
+            if is_now {
+                sty = sty.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+            }
+            spans.push(Span::styled(ch.to_string(), sty));
+        }
+        if !ratios.is_empty() {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(ratios, Style::default().fg(DIM).bg(BG)));
+        }
+
+        ListItem::new(Line::from(spans))
+    }));
 
     let title = match app.session_filename() {
         Some(filename) => format!(" maqam-live {filename} {} ", app.globals_filename()),
@@ -518,49 +543,60 @@ fn draw_input(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let text = if let Some(msg) = &app.message {
+    if let Some(msg) = &app.message {
         let col = if msg.starts_with('✗') { ERR } else { DIM };
-        Line::from(vec![Span::styled(
-            format!("  {msg}"),
-            Style::default().fg(col).bg(BG),
-        )])
+        let paragraph = Paragraph::new(msg.as_str())
+            .style(Style::default().fg(col).bg(BG))
+            .scroll((app.message_scroll, 0))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(Span::styled(
+                        " response PgUp/PgDn ",
+                        Style::default().fg(DIM).bg(BG),
+                    ))
+                    .border_style(Style::default().fg(BORDER).bg(BG)),
+            );
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    let vcf_status = if app.vcf.all.enabled {
+        format_vcf_status(app.vcf.all)
     } else {
-        let vcf_status = if app.vcf.all.enabled {
-            format_vcf_status(app.vcf.all)
+        let mut parts = Vec::new();
+        for setting in [
+            app.vcf.mic,
+            app.vcf.bass,
+            app.vcf.kanun,
+            app.vcf.kick,
+            app.vcf.tanbura,
+        ] {
+            if setting.enabled {
+                parts.push(format_vcf_status(setting));
+            }
+        }
+        if parts.is_empty() {
+            "off".to_string()
         } else {
-            let mut parts = Vec::new();
-            for setting in [
-                app.vcf.mic,
-                app.vcf.bass,
-                app.vcf.kanun,
-                app.vcf.kick,
-                app.vcf.tanbura,
-            ] {
-                if setting.enabled {
-                    parts.push(format_vcf_status(setting));
-                }
-            }
-            if parts.is_empty() {
-                "off".to_string()
-            } else {
-                parts.join(" ")
-            }
-        };
-        let fx_status = format_fx_status(app.fx);
-        Line::from(vec![Span::styled(
-            format!(
-                "  {}BPM:{} sus:{:.1}s vcf:{} fx:{} vol:{:.2} phrases:{}  [?] help  [z] sound  [z id] jump",
-                if app.paused { "⏸ PAUSED  " } else { "" },
-                app.bpm,
-                app.sustain,
-                vcf_status,
-                fx_status,
-                app.vol,
-                app.phrases.len()
-            ),
-            Style::default().fg(DIM).bg(BG),
-        )])
+            parts.join(" ")
+        }
     };
+    let fx_status = format_fx_status(app.fx);
+    let text = Line::from(vec![Span::styled(
+        format!(
+            "  {}BPM:{} sus:{:.1}s vcf:{} fx:{} vol:{:.2} phrases:{}  [?] help  [z] sound  [z id] jump",
+            if app.paused { "⏸ PAUSED  " } else { "" },
+            app.bpm,
+            app.sustain,
+            vcf_status,
+            fx_status,
+            app.vol,
+            app.phrases.len()
+        ),
+        Style::default().fg(DIM).bg(BG),
+    )]);
     f.render_widget(Paragraph::new(text).style(Style::default().bg(BG)), area);
 }
 
@@ -619,6 +655,32 @@ fn draw_recording(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 Style::default().fg(Color::Rgb(160, 160, 180)),
             ),
         ])
+    } else if let Some(progress) = &app.nam_download_progress {
+        let pct = progress
+            .total
+            .filter(|total| *total > 0)
+            .map(|total| (progress.downloaded * 100 / total).min(100));
+        let bar_w = (area.width as usize).saturating_sub(36).max(4);
+        let filled = pct.map(|pct| bar_w * pct as usize / 100).unwrap_or(0);
+        let bar: String = std::iter::repeat('=')
+            .take(filled)
+            .chain(std::iter::once('>').take(if filled < bar_w { 1 } else { 0 }))
+            .chain(std::iter::repeat(' ').take(bar_w.saturating_sub(filled + 1)))
+            .collect();
+        let action = if progress.load_after { "load" } else { "cache" };
+        let suffix = match pct {
+            Some(pct) => format!("] {pct:>3}% {action} {}", progress.name),
+            None => format!(
+                "] {} {action} {}",
+                format_download_size(progress.downloaded),
+                progress.name
+            ),
+        };
+        Line::from(vec![
+            Span::styled("  ↓ NAM [", Style::default().fg(Color::Rgb(120, 170, 255))),
+            Span::styled(bar, Style::default().fg(Color::Rgb(0, 200, 100))),
+            Span::styled(suffix, Style::default().fg(Color::Rgb(160, 160, 180))),
+        ])
     } else {
         match &app.last_recording {
             Some(path) => Line::from(vec![
@@ -635,6 +697,16 @@ fn draw_recording(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         }
     };
     f.render_widget(Paragraph::new(text).style(Style::default().bg(BG)), area);
+}
+
+fn format_download_size(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MiB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.0} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn draw_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
