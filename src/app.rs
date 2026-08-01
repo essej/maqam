@@ -1,14 +1,17 @@
 // app.rs — application state, phrases as top-level units
 
-use crate::command::{self, Cmd, JinsSpec, LlmProvider, NamCommand, ValueChange};
+use crate::command::{self, Cmd, JinsSpec, LlmProvider, NamCommand, NamInput, ValueChange};
 use crate::fx::FxSettings;
 use crate::record;
 use crate::sequencer::{build_control_entry, build_phrase, AudioCmd, BarSpec, ControlSpec, Phrase};
 use crate::tuning::Pitch;
 use crate::vcf::{VcfBank, VcfSettings, VcfTarget, VcoWave};
+use base64::Engine;
 use crossbeam_channel::Sender;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
@@ -22,6 +25,14 @@ pub struct NamDownloadProgress {
 enum NamDownloadEvent {
     Progress { downloaded: u64, total: Option<u64> },
     Done { name: String, load_after: bool },
+}
+
+#[derive(Clone, Debug)]
+struct Tone3000Auth {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_at: u64,
+    client_id: String,
 }
 
 pub struct App {
@@ -50,9 +61,13 @@ pub struct App {
     pub cursor_pos: usize,
     pub rec_rx: Option<crossbeam_channel::Receiver<Result<String, String>>>,
     nam_download_rx: Option<crossbeam_channel::Receiver<Result<NamDownloadEvent, String>>>,
+    tone3000_auth_rx: Option<crossbeam_channel::Receiver<Result<Tone3000Auth, String>>>,
+    nam_latency_rx: Option<crossbeam_channel::Receiver<Result<f64, String>>>,
+    pending_tone3000_download: Option<(u64, String)>,
     llm_rx: Option<crossbeam_channel::Receiver<Result<LlmOutcome, String>>>,
     llm_history: Vec<LlmChatMessage>,
     session_path: Option<String>,
+    pending_nam_slot: Option<String>,
     next_phrase_id: usize,
     last_rhythm: Vec<u8>,
     auditioning_jins: bool,
@@ -90,9 +105,13 @@ impl App {
             cursor_pos: 0,
             rec_rx: None,
             nam_download_rx: None,
+            tone3000_auth_rx: None,
+            nam_latency_rx: None,
+            pending_tone3000_download: None,
             llm_rx: None,
             llm_history: Vec::new(),
             session_path: None,
+            pending_nam_slot: None,
             next_phrase_id: 0,
             last_rhythm: vec![3, 3, 2],
             auditioning_jins: false,
@@ -417,6 +436,42 @@ impl App {
             }
         }
         self.poll_nam_download();
+        self.poll_tone3000_auth();
+        if let Some(result) = self
+            .nam_latency_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.nam_latency_rx = None;
+            self.message = Some(match result {
+                Ok(ms) => format!("NAM input round-trip latency: {ms:.1} ms"),
+                Err(err) => format!("✗ latency test: {err}"),
+            });
+        }
+    }
+
+    fn poll_tone3000_auth(&mut self) {
+        let result = self
+            .tone3000_auth_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
+        let Some(result) = result else { return };
+        self.tone3000_auth_rx = None;
+        match result {
+            Ok(auth) => {
+                if let Err(err) = save_tone3000_auth(&auth) {
+                    self.message = Some(format!(
+                        "✗ TONE3000 login succeeded but credentials could not be saved: {err}"
+                    ));
+                    return;
+                }
+                self.message = Some("TONE3000 login complete".into());
+                if let Some((tone_id, name)) = self.pending_tone3000_download.take() {
+                    self.start_tone3000_download(tone_id, name);
+                }
+            }
+            Err(err) => self.message = Some(format!("✗ TONE3000 login failed: {err}")),
+        }
     }
 
     fn poll_nam_download(&mut self) {
@@ -529,6 +584,51 @@ impl App {
         self.message = Some(format!("edited {id} → sym"));
     }
 
+    fn insert_nam_control(&mut self, before: isize, command: NamCommand) {
+        let Some(control) = nam_timeline_control(&command) else {
+            self.message = Some("✗ this NAM utility command cannot be scheduled".into());
+            return;
+        };
+        let Some(before_id) = self.resolve_id_ref(before) else {
+            self.message = Some(format!("✗ no phrase id {before}"));
+            return;
+        };
+        let pos = self
+            .phrases
+            .iter()
+            .position(|p| p.id == before_id)
+            .unwrap_or(self.phrases.len());
+        let id = self.next_phrase_id;
+        self.next_phrase_id += 1;
+        let src = nam_command_src(&command).unwrap();
+        let entry = build_control_entry(id, src, control);
+        self.phrases.insert(pos, entry.clone());
+        let _ = self
+            .audio_tx
+            .send(AudioCmd::InsertPhrase { pos, phrase: entry });
+        self.apply_nam_command(command);
+    }
+
+    fn replace_nam_control(&mut self, id_ref: isize, command: NamCommand) {
+        let Some(control) = nam_timeline_control(&command) else {
+            self.message = Some("✗ this NAM utility command cannot be scheduled".into());
+            return;
+        };
+        let Some(id) = self.resolve_id_ref(id_ref) else {
+            self.message = Some(format!("✗ no phrase id {id_ref}"));
+            return;
+        };
+        let Some(pos) = self.phrases.iter().position(|p| p.id == id) else {
+            self.message = Some(format!("✗ no phrase id {id}"));
+            return;
+        };
+        let src = nam_command_src(&command).unwrap();
+        let entry = build_control_entry(id, src, control);
+        self.phrases[pos] = entry.clone();
+        let _ = self.audio_tx.send(AudioCmd::ReplacePhrase(entry));
+        self.apply_nam_command(command);
+    }
+
     fn sequence_start_settings(&self) -> (f64, f64, VcfBank, FxSettings) {
         let mut bpm = 120.0f64;
         let mut sustain = 1.25f64;
@@ -553,7 +653,10 @@ impl App {
                     ControlSpec::SetSympathetics(_)
                     | ControlSpec::SetSympatheticDecay(_)
                     | ControlSpec::SetSympatheticGain(_)
-                    | ControlSpec::SetSympathetic(_) => {}
+                    | ControlSpec::SetSympathetic(_)
+                    | ControlSpec::SetNamEnabled(_)
+                    | ControlSpec::SetNamGain(_)
+                    | ControlSpec::SetNamInput(_) => {}
                 }
                 continue;
             }
@@ -882,6 +985,8 @@ impl App {
                 self.message = Some(format!("inserted {}", describe_fx(fx)));
             }
 
+            Cmd::InsertNam { before, command } => self.insert_nam_control(before, command),
+
             Cmd::InsertSympathetics { before, enabled } => {
                 self.insert_sym_control(
                     before,
@@ -1069,6 +1174,13 @@ impl App {
                     self.session_path = Some(path.clone());
                     let load_detail = self.message.take();
                     self.message = Some(match load_detail {
+                        Some(detail)
+                            if self.pending_nam_slot.is_some()
+                                || self.nam_download_progress.is_some()
+                                || detail.starts_with("TONE3000 authorization") =>
+                        {
+                            detail
+                        }
                         Some(detail) if detail.starts_with("loaded session; ") => {
                             format!(
                                 "loaded session ← {path}; {}",
@@ -1229,6 +1341,14 @@ impl App {
                 self.message = Some(format!("FX line → {}", describe_fx(fx)));
             }
             Cmd::SetNam(command) => {
+                if let Some(control) = nam_timeline_control(&command) {
+                    let id = self.next_phrase_id;
+                    self.next_phrase_id += 1;
+                    let src = nam_command_src(&command).unwrap();
+                    let entry = build_control_entry(id, src, control);
+                    self.phrases.push(entry.clone());
+                    let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry));
+                }
                 self.apply_nam_command(command);
             }
 
@@ -1412,6 +1532,8 @@ impl App {
                 self.message = Some(format!("edited {id} → {}", describe_fx(fx)));
             }
 
+            Cmd::EditNam { id, command } => self.replace_nam_control(id, command),
+
             Cmd::EditSympathetics { id, enabled } => {
                 self.replace_sym_control(
                     id,
@@ -1505,8 +1627,22 @@ impl App {
     fn apply_nam_command(&mut self, command: NamCommand) {
         let display_src = nam_command_src(&command);
         match command {
+            NamCommand::Login => self.start_tone3000_login(),
+            NamCommand::Logout => {
+                self.pending_tone3000_download = None;
+                match fs::remove_file(tone3000_auth_path()) {
+                    Ok(()) => self.message = Some("TONE3000 logged out".into()),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        self.message = Some("TONE3000 was not logged in".into())
+                    }
+                    Err(err) => {
+                        self.message =
+                            Some(format!("✗ could not remove TONE3000 credentials: {err}"))
+                    }
+                }
+            }
             NamCommand::Off => {
-                let _ = self.audio_tx.send(AudioCmd::SetNamModel(None));
+                let _ = self.audio_tx.send(AudioCmd::SetNamEnabled(false));
                 replace_live_nam_command(&mut self.live_nam_commands, display_src);
                 self.message = Some("NAM input amp off".into());
             }
@@ -1540,10 +1676,33 @@ impl App {
                     ),
                 });
             }
+            NamCommand::Search { query } => {
+                self.message = Some(match find_nam_captures(&query) {
+                    Ok(results) => results,
+                    Err(err) => format!("✗ {err}"),
+                });
+            }
             NamCommand::Gain(gain) => {
                 let _ = self.audio_tx.send(AudioCmd::SetNamGain(gain));
                 replace_live_nam_command(&mut self.live_nam_commands, display_src);
                 self.message = Some(format!("NAM input gain {gain:.2}"));
+            }
+            NamCommand::Input(route) => {
+                let _ = self.audio_tx.send(AudioCmd::SetNamInput(route));
+                replace_live_nam_command(&mut self.live_nam_commands, display_src);
+                self.message = Some(format!("NAM input → {}", nam_input_name(route)));
+            }
+            NamCommand::Latency(route) => {
+                let (tx, rx) = crossbeam_channel::bounded(1);
+                self.nam_latency_rx = Some(rx);
+                let _ = self.audio_tx.send(AudioCmd::MeasureInputLatency {
+                    input: route,
+                    result_tx: tx,
+                });
+                self.message = Some(format!(
+                    "measuring capture-to-playback device timestamps for {} input…",
+                    nam_input_name(route)
+                ));
             }
             NamCommand::Import { path, name } => {
                 if is_http_url(&path) {
@@ -1579,6 +1738,38 @@ impl App {
                     return;
                 }
                 self.message = Some(format!("NAM capture imported: {cache_name}"));
+            }
+            NamCommand::Pin { url, name } => {
+                let name = sanitize_nam_cache_name(&name);
+                if name.is_empty() {
+                    self.message = Some("✗ NAM pin name is empty".into());
+                    return;
+                }
+                if let Some(path) = self.session_path.as_deref() {
+                    if let Err(err) = pin_nam_dependency(path, &name, &url) {
+                        self.message = Some(format!("✗ could not update {path}: {err}"));
+                        return;
+                    }
+                }
+                self.pending_nam_slot = None;
+                replace_live_nam_command(
+                    &mut self.live_nam_commands,
+                    Some(format!("nam pin {url} as {name}")),
+                );
+                self.start_nam_download(url, Some(name), true);
+            }
+            NamCommand::Tone3000 { tone_id, name } => {
+                let name = sanitize_nam_cache_name(&name);
+                let src = format!("nam tone3000 {tone_id} as {name}");
+                if let Some(path) = self.session_path.as_deref() {
+                    if let Err(err) = pin_nam_reference(path, &name, &src) {
+                        self.message = Some(format!("✗ could not update {path}: {err}"));
+                        return;
+                    }
+                }
+                self.pending_nam_slot = None;
+                replace_live_nam_command(&mut self.live_nam_commands, Some(src));
+                self.start_tone3000_download(tone_id, name);
             }
             NamCommand::Load { path } => {
                 if is_http_url(&path) {
@@ -1640,10 +1831,61 @@ impl App {
 
         std::thread::spawn(move || {
             let result =
-                download_nam_capture(&url, &cache_dir, &cache_name, load_after, tx.clone());
+                download_nam_capture(&url, &cache_dir, &cache_name, load_after, None, tx.clone());
             if let Err(err) = result {
                 let _ = tx.send(Err(err));
             }
+        });
+    }
+
+    fn start_tone3000_download(&mut self, tone_id: u64, name: String) {
+        let token = match tone3000_access_token() {
+            Ok(token) => token,
+            Err(_) => {
+                self.pending_tone3000_download = Some((tone_id, name));
+                self.message = Some(format!(
+                    "TONE3000 login is needed to fetch tone {tone_id}; run `nam login`"
+                ));
+                return;
+            }
+        };
+        let cache_dir = nam_cache_dir();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        self.nam_download_rx = Some(rx);
+        self.nam_download_progress = Some(NamDownloadProgress {
+            name: name.clone(),
+            downloaded: 0,
+            total: None,
+            load_after: true,
+        });
+        self.message = Some(format!("downloading TONE3000 tone {tone_id} → {name}"));
+        std::thread::spawn(move || {
+            let result = tone3000_model_url(tone_id, &token).and_then(|url| {
+                download_nam_capture(&url, &cache_dir, &name, true, Some(&token), tx.clone())
+            });
+            if let Err(err) = result {
+                let _ = tx.send(Err(err));
+            }
+        });
+    }
+
+    fn start_tone3000_login(&mut self) {
+        if self.tone3000_auth_rx.is_some() {
+            self.message = Some("TONE3000 login is already waiting in the browser".into());
+            return;
+        }
+        let client_id = std::env::var("TONE3000_CLIENT_ID")
+            .or_else(|_| std::env::var("TONE3000_PUBLISHABLE_KEY"));
+        let Ok(client_id) = client_id else {
+            self.message = Some("✗ set TONE3000_CLIENT_ID to the publishable client ID from TONE3000 Settings → API Keys".into());
+            return;
+        };
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        self.tone3000_auth_rx = Some(rx);
+        self.message =
+            Some("TONE3000 login opened in your browser; maqam-live is still running".into());
+        std::thread::spawn(move || {
+            let _ = tx.send(tone3000_browser_login(&client_id));
         });
     }
 
@@ -1944,7 +2186,18 @@ impl App {
     where
         I: Iterator<Item = &'a str>,
     {
+        let lines = lines.collect::<Vec<_>>();
+        let reserved_ids = lines
+            .iter()
+            .filter_map(|line| {
+                crate::session_v3::split_escaped_fields(line)
+                    .get(1)?
+                    .parse::<usize>()
+                    .ok()
+            })
+            .collect::<std::collections::HashSet<_>>();
         crate::tuning::Maqam::reset_to_defaults();
+        self.pending_nam_slot = None;
         let mut new_bpm = 120.0f64;
         let mut new_sustain = 1.25f64;
         let mut new_vcf = VcfBank::default();
@@ -1958,8 +2211,10 @@ impl App {
         let mut live_nam_audio_cmds = Vec::new();
         let mut live_nam_commands = Vec::new();
         let mut live_nam_warnings = Vec::new();
+        let mut pending_nam_pin: Option<(String, String)> = None;
+        let mut pending_tone3000: Option<(u64, String)> = None;
 
-        for (line_idx, raw_line) in lines.enumerate() {
+        for (line_idx, raw_line) in lines.into_iter().enumerate() {
             let line_no = line_idx + 2;
             let line = raw_line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -1987,15 +2242,61 @@ impl App {
                     return Err(format!("line {line_no}: expected nam line"));
                 };
                 let display_src = nam_command_src(&command);
+                let missing_slot = match &command {
+                    NamCommand::Load { path } => Some(path.clone()),
+                    _ => None,
+                };
+                let pin = match &command {
+                    NamCommand::Pin { url, name } => Some((url.clone(), name.clone())),
+                    _ => None,
+                };
+                let tone3000 = match &command {
+                    NamCommand::Tone3000 { tone_id, name } => Some((*tone_id, name.clone())),
+                    _ => None,
+                };
                 match nam_session_audio_cmd(command) {
                     Ok(audio_cmd) => live_nam_audio_cmds.push(audio_cmd),
-                    Err(err) => live_nam_warnings.push(format!("line {line_no}: {err}")),
+                    Err(err) => {
+                        if let Some(tone3000) = tone3000 {
+                            pending_tone3000 = Some(tone3000);
+                        } else if let Some(pin) = pin {
+                            pending_nam_pin = Some(pin);
+                        } else if let Some(slot) = missing_slot {
+                            self.pending_nam_slot = Some(slot.clone());
+                            live_nam_warnings.push(format!(
+                                "This score needs a NAM model for “{slot}”. What amp or tone should it use?"
+                            ));
+                        } else {
+                            live_nam_warnings.push(format!("line {line_no}: {err}"));
+                        }
+                    }
                 }
                 replace_live_nam_command(&mut live_nam_commands, display_src);
+                if let Some(control) = nam_timeline_control(
+                    &command::parse(line)
+                        .ok()
+                        .and_then(|cmd| {
+                            if let Cmd::SetNam(command) = cmd {
+                                Some(command)
+                            } else {
+                                None
+                            }
+                        })
+                        .ok_or_else(|| format!("line {line_no}: expected nam line"))?,
+                ) {
+                    while ids.contains(&next_legacy_id) || reserved_ids.contains(&next_legacy_id) {
+                        next_legacy_id += 1;
+                    }
+                    let id = next_legacy_id;
+                    next_legacy_id += 1;
+                    ids.insert(id);
+                    max_id = Some(max_id.map_or(id, |current: usize| current.max(id)));
+                    loaded.push(build_control_entry(id, line.to_string(), control));
+                }
                 continue;
             }
             if is_plain_control_line(line) {
-                while ids.contains(&next_legacy_id) {
+                while ids.contains(&next_legacy_id) || reserved_ids.contains(&next_legacy_id) {
                     next_legacy_id += 1;
                 }
                 let id = next_legacy_id;
@@ -2148,6 +2449,43 @@ impl App {
                         ControlSpec::SetFx(change),
                     ));
                 }
+                Some("N") if fields.len() == 3 => {
+                    let parsed =
+                        command::parse(&fields[2]).map_err(|e| format!("line {line_no}: {e}"))?;
+                    let Cmd::SetNam(command) = parsed else {
+                        return Err(format!("line {line_no}: expected nam line"));
+                    };
+                    let control = nam_timeline_control(&command).ok_or_else(|| {
+                        format!("line {line_no}: NAM command cannot be scheduled")
+                    })?;
+                    let missing_slot = match &command {
+                        NamCommand::Load { path } => Some(path.clone()),
+                        _ => None,
+                    };
+                    let pin = match &command {
+                        NamCommand::Pin { url, name } => Some((url.clone(), name.clone())),
+                        _ => None,
+                    };
+                    let tone = match &command {
+                        NamCommand::Tone3000 { tone_id, name } => Some((*tone_id, name.clone())),
+                        _ => None,
+                    };
+                    match nam_session_audio_cmd(command) {
+                        Ok(audio_cmd) => live_nam_audio_cmds.push(audio_cmd),
+                        Err(err) => {
+                            if let Some(value) = tone {
+                                pending_tone3000 = Some(value);
+                            } else if let Some(value) = pin {
+                                pending_nam_pin = Some(value);
+                            } else if let Some(slot) = missing_slot {
+                                self.pending_nam_slot = Some(slot);
+                            } else {
+                                live_nam_warnings.push(format!("line {line_no}: {err}"));
+                            }
+                        }
+                    }
+                    loaded.push(build_control_entry(id, fields[2].clone(), control));
+                }
                 Some("Y") if fields.len() == 3 => {
                     let parsed =
                         command::parse(&fields[2]).map_err(|e| format!("line {line_no}: {e}"))?;
@@ -2282,10 +2620,14 @@ impl App {
             let _ = self.audio_tx.send(AudioCmd::AddPhrase(phrase));
         }
         let _ = self.audio_tx.send(AudioCmd::SetCurPhrase(0));
+        if let Some((url, name)) = pending_nam_pin {
+            self.start_nam_download(url, Some(name), true);
+        }
+        if let Some((tone_id, name)) = pending_tone3000 {
+            self.start_tone3000_download(tone_id, name);
+        }
         if let Some(warning) = live_nam_warnings.first() {
-            self.message = Some(format!(
-                "loaded session; NAM not loaded: {warning}. Score loaded without the live amp."
-            ));
+            self.message = Some(warning.clone());
         }
         Ok(())
     }
@@ -2730,14 +3072,20 @@ impl LlmRequest {
                 prompt,
                 history,
                 score_context,
-            } => ask_chatgpt_edit(&key, &model, &prompt, &history, &score_context),
+            } => {
+                let prompt = prompt_with_automatic_nam_research(&prompt)?;
+                ask_chatgpt_edit(&key, &model, &prompt, &history, &score_context)
+            }
             Self::Claude {
                 key,
                 model,
                 prompt,
                 history,
                 score_context,
-            } => ask_claude_edit(&key, &model, &prompt, &history, &score_context),
+            } => {
+                let prompt = prompt_with_automatic_nam_research(&prompt)?;
+                ask_claude_edit(&key, &model, &prompt, &history, &score_context)
+            }
         }
     }
 }
@@ -3262,6 +3610,9 @@ fn llm_prompt_needs_nam_research(prompt: &str) -> bool {
         "search",
         "browse",
         "download",
+        "add",
+        "use",
+        "common",
         "get me",
         "look up",
         "lookup",
@@ -3572,9 +3923,6 @@ fn is_sym_command_noun(token: &str) -> bool {
 
 fn llm_prompt_is_edit_request(prompt: &str) -> bool {
     let lower = prompt.trim_start().to_ascii_lowercase();
-    if llm_prompt_mentions_nam(&lower) {
-        return false;
-    }
     lower.starts_with("let's ")
         || lower.starts_with("lets ")
         || lower.starts_with("i need ")
@@ -3625,13 +3973,6 @@ fn llm_prompt_is_how_to_action(lower_prompt: &str) -> bool {
         .any(|prefix| lower_prompt.starts_with(prefix))
 }
 
-fn llm_prompt_mentions_nam(lower_prompt: &str) -> bool {
-    lower_prompt.contains("neural amp")
-        || lower_prompt
-            .split(|ch: char| !ch.is_ascii_alphanumeric())
-            .any(|word| word == "nam")
-}
-
 fn llm_rejected_edit_command_message(command_src: &str, cmd: &Cmd) -> String {
     match cmd {
         Cmd::SetNam(_) => format!(
@@ -3645,11 +3986,17 @@ fn llm_rejected_edit_command_message(command_src: &str, cmd: &Cmd) -> String {
 
 fn llm_edit_prompt(user_prompt: &str) -> String {
     format!(
-        "User wants this edit:\n{user_prompt}\n\nThis is an action request: make the change with the apply_maqam_commands tool instead of explaining how the user could do it. Use the current score from the system prompt as context. Return only new maqam-live commands to apply the edit, separated by newlines or semicolons. Never concatenate two commands without a separator; use `sym on; sym decay 0.999 drive 2`, not `sym on sym decay 0.999 drive 2`. Do not include existing score lines, ids, markdown, bullets, explanations, or comments. Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, nam, or clear commands."
+        "User wants this edit:\n{user_prompt}\n\nThis is an action request: make the change with the apply_maqam_commands tool instead of explaining how the user could do it. Use the current score from the system prompt as context. Return only new maqam-live commands to apply the edit, separated by newlines or semicolons. Never concatenate two commands without a separator; use `sym on; sym decay 0.999 drive 2`, not `sym on sym decay 0.999 drive 2`. Do not include existing score lines, ids, markdown, bullets, explanations, or comments. Never return save, load, m/record, q/quit, z/playback, pause, start, clock, help, ls, audition, or clear commands. NAM edits must be portable: use only `nam tone3000 ID as name` or `nam pin DIRECT_URL as name`, never a bare local alias."
     )
 }
 
 fn llm_edit_command_allowed(cmd: &Cmd) -> bool {
+    if matches!(
+        cmd,
+        Cmd::SetNam(NamCommand::Pin { .. } | NamCommand::Tone3000 { .. })
+    ) {
+        return true;
+    }
     matches!(
         cmd,
         Cmd::AddPhrase { .. }
@@ -3796,6 +4143,37 @@ fn nam_cache_dir() -> PathBuf {
     PathBuf::from(".nam")
 }
 
+fn pin_nam_dependency(session_path: &str, name: &str, url: &str) -> Result<(), String> {
+    pin_nam_reference(session_path, name, &format!("nam pin {url} as {name}"))
+}
+
+fn pin_nam_reference(session_path: &str, name: &str, pinned: &str) -> Result<(), String> {
+    let source = fs::read_to_string(session_path).map_err(|err| err.to_string())?;
+    let mut replaced = false;
+    let mut lines = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let matches_alias = trimmed == format!("nam {name}")
+            || ((trimmed.starts_with("nam pin ") || trimmed.starts_with("nam tone3000 "))
+                && trimmed.ends_with(&format!(" as {name}")));
+        if matches_alias {
+            if !replaced {
+                lines.push(pinned.to_string());
+                replaced = true;
+            }
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !replaced {
+        let insert_at = usize::from(lines.first().is_some_and(|line| line == "MAQAM_SESSION_V3"));
+        lines.insert(insert_at, pinned.to_string());
+    }
+    let mut output = lines.join("\n");
+    output.push('\n');
+    fs::write(session_path, output).map_err(|err| err.to_string())
+}
+
 fn is_http_url(value: &str) -> bool {
     value.starts_with("https://") || value.starts_with("http://")
 }
@@ -3815,7 +4193,7 @@ fn resolve_nam_model_path(value: &str) -> Result<PathBuf, String> {
         return Ok(cached);
     }
     Err(format!(
-        "NAM model `{value}` not found as a file or cached capture in ./.nam; run `nam import URL as {}` to download into ./.nam, or `nam import FILENAME.nam as {}` for a real local file",
+        "NAM model `{value}` not found as a file or cached capture in ./.nam; run `nam search <amp or tone>` to find one, then `nam import URL as {}` to download into ./.nam, or `nam import FILENAME.nam as {}` for a downloaded file",
         sanitize_nam_cache_name(value),
         sanitize_nam_cache_name(value)
     ))
@@ -3848,6 +4226,7 @@ fn download_nam_capture(
     cache_dir: &Path,
     cache_name: &str,
     load_after: bool,
+    bearer_token: Option<&str>,
     tx: crossbeam_channel::Sender<Result<NamDownloadEvent, String>>,
 ) -> Result<(), String> {
     fs::create_dir_all(cache_dir).map_err(|err| {
@@ -3858,8 +4237,11 @@ fn download_nam_capture(
     })?;
     let dest = cache_dir.join(format!("{cache_name}.nam"));
     let partial = cache_dir.join(format!("{cache_name}.nam.part"));
-    let response = ureq::get(url)
-        .timeout(std::time::Duration::from_secs(120))
+    let mut request = ureq::get(url).timeout(std::time::Duration::from_secs(120));
+    if let Some(token) = bearer_token {
+        request = request.set("Authorization", &format!("Bearer {token}"));
+    }
+    let response = request
         .call()
         .map_err(|err| {
             format!(
@@ -3920,13 +4302,235 @@ fn download_nam_capture(
     Ok(())
 }
 
+fn tone3000_model_url(tone_id: u64, token: &str) -> Result<String, String> {
+    let url = format!(
+        "https://www.tone3000.com/api/v1/models?tone_id={tone_id}&page=1&page_size=1&architecture=2"
+    );
+    let response: serde_json::Value = ureq::get(&url)
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(30))
+        .call()
+        .map_err(describe_http_error)?
+        .into_json()
+        .map_err(|err| format!("TONE3000 response could not be read: {err}"))?;
+    response
+        .pointer("/data/0/model_url")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| format!("TONE3000 tone {tone_id} has no downloadable A2 NAM model"))
+}
+
+fn tone3000_auth_path() -> PathBuf {
+    std::env::var_os("MAQAM_TONE3000_AUTH_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".tone3000-auth.json"))
+}
+
+fn save_tone3000_auth(auth: &Tone3000Auth) -> Result<(), String> {
+    let value = serde_json::json!({
+        "access_token": auth.access_token,
+        "refresh_token": auth.refresh_token,
+        "expires_at": auth.expires_at,
+        "client_id": auth.client_id,
+    });
+    let path = tone3000_auth_path();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        file.write_all(value.to_string().as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(unix))]
+    fs::write(&path, value.to_string()).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(())
+}
+
+fn load_tone3000_auth() -> Result<Tone3000Auth, String> {
+    let path = tone3000_auth_path();
+    let value: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Tone3000Auth {
+        access_token: value["access_token"]
+            .as_str()
+            .ok_or("stored access token is missing")?
+            .into(),
+        refresh_token: value["refresh_token"].as_str().map(str::to_string),
+        expires_at: value["expires_at"].as_u64().unwrap_or(0),
+        client_id: value["client_id"]
+            .as_str()
+            .ok_or("stored client ID is missing")?
+            .into(),
+    })
+}
+
+fn unix_time() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn tone3000_access_token() -> Result<String, String> {
+    if let Ok(token) = std::env::var("TONE3000_ACCESS_TOKEN") {
+        return Ok(token);
+    }
+    let mut auth = load_tone3000_auth()?;
+    if auth.expires_at > unix_time() + 60 {
+        return Ok(auth.access_token);
+    }
+    let refresh = auth
+        .refresh_token
+        .clone()
+        .ok_or("TONE3000 login expired; run `nam login`")?;
+    let response: serde_json::Value = ureq::post("https://www.tone3000.com/api/v1/oauth/token")
+        .send_form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", &refresh),
+            ("client_id", &auth.client_id),
+        ])
+        .map_err(describe_http_error)?
+        .into_json()
+        .map_err(|e| format!("TONE3000 refresh response could not be read: {e}"))?;
+    auth.access_token = response["access_token"]
+        .as_str()
+        .ok_or("TONE3000 refresh returned no access token")?
+        .into();
+    auth.refresh_token = response["refresh_token"]
+        .as_str()
+        .map(str::to_string)
+        .or(auth.refresh_token);
+    auth.expires_at = unix_time() + response["expires_in"].as_u64().unwrap_or(3600);
+    save_tone3000_auth(&auth)?;
+    Ok(auth.access_token)
+}
+
+fn random_base64url(bytes: usize) -> Result<String, String> {
+    let mut raw = vec![0u8; bytes];
+    getrandom::getrandom(&mut raw).map_err(|e| format!("could not generate OAuth secret: {e}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw))
+}
+
+fn tone3000_browser_login(client_id: &str) -> Result<Tone3000Auth, String> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("could not start local OAuth callback: {e}"))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let redirect_uri = format!("http://localhost:{port}/callback");
+    let verifier = random_base64url(64)?;
+    let state = random_base64url(32)?;
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(Sha256::digest(verifier.as_bytes()));
+    let mut auth_url = url::Url::parse("https://www.tone3000.com/api/v1/oauth/authorize")
+        .map_err(|e| e.to_string())?;
+    auth_url
+        .query_pairs_mut()
+        .append_pair("client_id", client_id)
+        .append_pair("redirect_uri", &redirect_uri)
+        .append_pair("response_type", "code")
+        .append_pair("code_challenge", &challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("state", &state);
+    open_system_browser(auth_url.as_str())?;
+    listener.set_nonblocking(false).map_err(|e| e.to_string())?;
+    let (mut stream, _) = listener
+        .accept()
+        .map_err(|e| format!("OAuth callback failed: {e}"))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .ok();
+    let mut request = [0u8; 8192];
+    let length = stream
+        .read(&mut request)
+        .map_err(|e| format!("OAuth callback could not be read: {e}"))?;
+    let first_line = String::from_utf8_lossy(&request[..length])
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let target = first_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("invalid OAuth callback")?;
+    let callback =
+        url::Url::parse(&format!("http://localhost{target}")).map_err(|e| e.to_string())?;
+    let params = callback
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    let returned_state = params.get("state").ok_or("OAuth callback omitted state")?;
+    if returned_state.as_ref() != state {
+        return Err("OAuth state did not match".into());
+    }
+    let code = params.get("code").ok_or_else(|| {
+        params
+            .get("error")
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "OAuth callback omitted code".into())
+    })?;
+    let body = b"TONE3000 login complete. You can return to maqam-live.";
+    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.write_all(body);
+    let token: serde_json::Value = ureq::post("https://www.tone3000.com/api/v1/oauth/token")
+        .send_form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code.as_ref()),
+            ("redirect_uri", &redirect_uri),
+            ("client_id", client_id),
+            ("code_verifier", &verifier),
+        ])
+        .map_err(describe_http_error)?
+        .into_json()
+        .map_err(|e| format!("TONE3000 token response could not be read: {e}"))?;
+    Ok(Tone3000Auth {
+        access_token: token["access_token"]
+            .as_str()
+            .ok_or("TONE3000 returned no access token")?
+            .into(),
+        refresh_token: token["refresh_token"].as_str().map(str::to_string),
+        expires_at: unix_time() + token["expires_in"].as_u64().unwrap_or(3600),
+        client_id: client_id.into(),
+    })
+}
+
+fn open_system_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(url).status();
+    #[cfg(target_os = "linux")]
+    let status = std::process::Command::new("xdg-open").arg(url).status();
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .status();
+    status
+        .map_err(|e| format!("could not open browser: {e}"))?
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("could not open browser; visit {url}"))
+}
+
 fn nam_session_audio_cmd(command: NamCommand) -> Result<AudioCmd, String> {
     match command {
         NamCommand::Load { path } => nam_load_audio_cmd(&path).map(|(cmd, _message)| cmd),
         NamCommand::Off => Ok(AudioCmd::SetNamModel(None)),
         NamCommand::Gain(gain) => Ok(AudioCmd::SetNamGain(gain)),
-        NamCommand::Import { .. } | NamCommand::List => Err(
-            "NAM lines in .mq files can load, bypass, or set gain only; run import/list interactively"
+        NamCommand::Input(route) => Ok(AudioCmd::SetNamInput(route)),
+        NamCommand::Pin { name, .. } => {
+            nam_load_audio_cmd(&name).map(|(cmd, _message)| cmd)
+        }
+        NamCommand::Tone3000 { name, .. } => {
+            nam_load_audio_cmd(&name).map(|(cmd, _message)| cmd)
+        }
+        NamCommand::Login | NamCommand::Logout | NamCommand::Latency(_) | NamCommand::Import { .. } | NamCommand::Search { .. } | NamCommand::List => Err(
+            "NAM lines in .mq files can load, bypass, or set gain only; run import/search/list interactively"
                 .into(),
         ),
     }
@@ -3937,7 +4541,40 @@ fn nam_command_src(command: &NamCommand) -> Option<String> {
         NamCommand::Load { path } => Some(format!("nam {path}")),
         NamCommand::Off => Some("nam off".to_string()),
         NamCommand::Gain(gain) => Some(format!("nam gain {gain}")),
-        NamCommand::Import { .. } | NamCommand::List => None,
+        NamCommand::Input(route) => Some(format!("nam input {}", nam_input_name(*route))),
+        NamCommand::Pin { url, name } => Some(format!("nam pin {url} as {name}")),
+        NamCommand::Tone3000 { tone_id, name } => Some(format!("nam tone3000 {tone_id} as {name}")),
+        NamCommand::Login
+        | NamCommand::Logout
+        | NamCommand::Latency(_)
+        | NamCommand::Import { .. }
+        | NamCommand::Search { .. }
+        | NamCommand::List => None,
+    }
+}
+
+fn nam_input_name(route: NamInput) -> &'static str {
+    match route {
+        NamInput::Left => "left",
+        NamInput::Right => "right",
+        NamInput::Stereo => "stereo",
+    }
+}
+
+fn nam_timeline_control(command: &NamCommand) -> Option<ControlSpec> {
+    match command {
+        NamCommand::Off => Some(ControlSpec::SetNamEnabled(false)),
+        NamCommand::Gain(gain) => Some(ControlSpec::SetNamGain(*gain)),
+        NamCommand::Input(route) => Some(ControlSpec::SetNamInput(*route)),
+        NamCommand::Load { .. } | NamCommand::Pin { .. } | NamCommand::Tone3000 { .. } => {
+            Some(ControlSpec::SetNamEnabled(true))
+        }
+        NamCommand::Login
+        | NamCommand::Logout
+        | NamCommand::Latency(_)
+        | NamCommand::Import { .. }
+        | NamCommand::Search { .. }
+        | NamCommand::List => None,
     }
 }
 
@@ -4928,6 +5565,84 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[test]
+    fn parses_direct_nam_search_command() {
+        let parsed = command::parse("nam search clean dynamic A2 amp cab").unwrap();
+        assert!(matches!(
+            parsed,
+            Cmd::SetNam(NamCommand::Search { query })
+                if query == "clean dynamic A2 amp cab"
+        ));
+        let pinned = command::parse("nam pin https://models.example/clean.nam as clean").unwrap();
+        assert!(matches!(
+            pinned,
+            Cmd::SetNam(NamCommand::Pin { url, name })
+                if url == "https://models.example/clean.nam" && name == "clean"
+        ));
+        let tone = command::parse("nam tone3000 45896 as nama2").unwrap();
+        assert!(matches!(
+            tone,
+            Cmd::SetNam(NamCommand::Tone3000 { tone_id: 45896, name }) if name == "nama2"
+        ));
+    }
+
+    #[test]
+    fn parses_tone3000_login_commands() {
+        assert!(matches!(
+            command::parse("nam login").unwrap(),
+            Cmd::SetNam(NamCommand::Login)
+        ));
+        assert!(matches!(
+            command::parse("nam logout").unwrap(),
+            Cmd::SetNam(NamCommand::Logout)
+        ));
+        assert!(matches!(
+            command::parse("nam input right").unwrap(),
+            Cmd::SetNam(NamCommand::Input(NamInput::Right))
+        ));
+        assert!(matches!(
+            command::parse("nam latency left").unwrap(),
+            Cmd::SetNam(NamCommand::Latency(NamInput::Left))
+        ));
+        assert!(matches!(
+            command::parse("i 6 nam gain 4").unwrap(),
+            Cmd::InsertNam {
+                before: 6,
+                command: NamCommand::Gain(4.0)
+            }
+        ));
+        assert!(matches!(
+            command::parse("edit 2 nam input stereo").unwrap(),
+            Cmd::EditNam {
+                id: 2,
+                command: NamCommand::Input(NamInput::Stereo)
+            }
+        ));
+    }
+
+    #[test]
+    fn pinning_nam_rewrites_ambiguous_session_dependency() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("maqam-pin-{suffix}.mq"));
+        fs::write(&path, "MAQAM_SESSION_V3\nnam slot\nP|0|1|d bayati 4\n").unwrap();
+
+        pin_nam_dependency(
+            path.to_str().unwrap(),
+            "slot",
+            "https://models.example/clean.nam",
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "MAQAM_SESSION_V3\nnam pin https://models.example/clean.nam as slot\nP|0|1|d bayati 4\n"
+        );
+        let _ = fs::remove_file(path);
+    }
+
     fn session_test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
@@ -5210,11 +5925,18 @@ mod tests {
         app.load_session_v3(["nam practice", "P|0|1|d bayati 4444"].into_iter())
             .unwrap();
         assert_eq!(app.live_nam_commands, vec!["nam practice"]);
-        assert_eq!(app.phrases.len(), 1);
-        assert_eq!(app.phrases[0].src, "d bayati 4444");
-        assert!(app.message.as_deref().is_some_and(|message| {
-            message.contains("loaded session; NAM not loaded") && message.contains("practice")
-        }));
+        assert_eq!(app.phrases.len(), 2);
+        assert_eq!(app.phrases[0].src, "nam practice");
+        assert!(matches!(
+            app.phrases[0].control,
+            Some(ControlSpec::SetNamEnabled(true))
+        ));
+        assert_eq!(app.phrases[1].src, "d bayati 4444");
+        assert_eq!(app.pending_nam_slot.as_deref(), Some("practice"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("This score needs a NAM model for “practice”. What amp or tone should it use?")
+        );
 
         let _ = fs::remove_dir_all(&cache_dir);
         if let Some(path) = old_cache_dir {
@@ -5749,7 +6471,7 @@ mod tests {
         assert!(llm_prompt_is_edit_request("add in sympathetics"));
         assert!(llm_prompt_is_edit_request("how do i get sympathetics?"));
         assert!(!llm_prompt_is_edit_request("can i have NAM A2?"));
-        assert!(!llm_prompt_is_edit_request("add NAM A2 on input"));
+        assert!(llm_prompt_is_edit_request("add NAM A2 on input"));
         assert!(!llm_prompt_is_edit_request(
             "what are the valid values for sym decay?"
         ));

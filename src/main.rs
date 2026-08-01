@@ -29,6 +29,11 @@ pub static EXIT_PHRASE: std::sync::atomic::AtomicUsize =
 pub static CUR_SUBDIV: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static CUR_PLAYS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static CUR_JUMP_VALUE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Smoothed capture-to-predicted-playback latency in microseconds. Zero means unavailable.
+pub static AUDIO_LATENCY_LEFT_US: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub static AUDIO_LATENCY_RIGHT_US: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// Progress atomics: written by render thread, read by TUI.
 pub static REC_SAMPLES_DONE: std::sync::atomic::AtomicUsize =

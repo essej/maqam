@@ -42,6 +42,11 @@ pub fn serialize_session_v3(phrases: &[Phrase]) -> String {
                 ControlSpec::SetFx(_) => {
                     out.push_str(&format!("F|{}|{}\n", p.id, escape_field(&p.src)))
                 }
+                ControlSpec::SetNamEnabled(_)
+                | ControlSpec::SetNamGain(_)
+                | ControlSpec::SetNamInput(_) => {
+                    out.push_str(&format!("N|{}|{}\n", p.id, escape_field(&p.src)))
+                }
                 ControlSpec::SetSympathetics(_)
                 | ControlSpec::SetSympatheticDecay(_)
                 | ControlSpec::SetSympatheticGain(_)

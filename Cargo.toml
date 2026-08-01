@@ -16,6 +16,9 @@ contracts         = "0.6"
 nam-rs            = "0.4"
 ureq              = { version = "2.12", features = ["json"] }
 serde_json        = "1.0"
+sha2              = "0.10"
+base64            = "0.22"
+getrandom         = "0.2"
 # Keep ureq's URL/idna tree compatible with rust-toolchain.toml's Rust 1.85.
 url               = "=2.5.4"
 idna              = "=1.0.3"

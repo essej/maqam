@@ -454,7 +454,10 @@ fn expand_one_cycle(
                 ControlSpec::SetSympathetics(_)
                 | ControlSpec::SetSympatheticDecay(_)
                 | ControlSpec::SetSympatheticGain(_)
-                | ControlSpec::SetSympathetic(_) => {}
+                | ControlSpec::SetSympathetic(_)
+                | ControlSpec::SetNamEnabled(_)
+                | ControlSpec::SetNamGain(_)
+                | ControlSpec::SetNamInput(_) => {}
             }
             cur += 1;
             continue;

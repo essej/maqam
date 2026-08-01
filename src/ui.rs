@@ -246,29 +246,7 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             width.max(format!("[{total}/{total}]").len())
         });
 
-    let mut items: Vec<ListItem> = app
-        .live_nam_commands
-        .iter()
-        .map(|command| {
-            ListItem::new(Line::from(vec![
-                Span::styled("•", Style::default().fg(ROW_GUARD).bg(BG)),
-                Span::styled("     ", Style::default().fg(DIM).bg(BG)),
-                Span::styled("· ", Style::default().fg(DIM).bg(BG)),
-                Span::styled(
-                    "    ".repeat(jumpbacks.len()),
-                    Style::default().fg(DIM).bg(BG),
-                ),
-                Span::styled(
-                    format!("{:<status_width$} ", "[live]"),
-                    Style::default().fg(DIM).bg(BG),
-                ),
-                Span::styled(
-                    command.clone(),
-                    Style::default().fg(DIM).bg(BG).add_modifier(Modifier::BOLD),
-                ),
-            ]))
-        })
-        .collect();
+    let mut items: Vec<ListItem> = Vec::new();
 
     items.extend(app.phrases.iter().enumerate().map(|(idx, phrase)| {
         let playing = idx == cur % n;
@@ -543,6 +521,7 @@ fn draw_input(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let latency = latency_status();
     if let Some(msg) = &app.message {
         let col = if msg.starts_with('✗') { ERR } else { DIM };
         let paragraph = Paragraph::new(msg.as_str())
@@ -553,7 +532,7 @@ fn draw_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(Span::styled(
-                        " response PgUp/PgDn ",
+                        format!(" response PgUp/PgDn  {latency} "),
                         Style::default().fg(DIM).bg(BG),
                     ))
                     .border_style(Style::default().fg(BORDER).bg(BG)),
@@ -586,18 +565,33 @@ fn draw_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let fx_status = format_fx_status(app.fx);
     let text = Line::from(vec![Span::styled(
         format!(
-            "  {}BPM:{} sus:{:.1}s vcf:{} fx:{} vol:{:.2} phrases:{}  [?] help  [z] sound  [z id] jump",
+            "  {}BPM:{} sus:{:.1}s vcf:{} fx:{} vol:{:.2} phrases:{} {}  [?] help  [z] sound  [z id] jump",
             if app.paused { "⏸ PAUSED  " } else { "" },
             app.bpm,
             app.sustain,
             vcf_status,
             fx_status,
             app.vol,
-            app.phrases.len()
+            app.phrases.len(),
+            latency
         ),
         Style::default().fg(DIM).bg(BG),
     )]);
     f.render_widget(Paragraph::new(text).style(Style::default().bg(BG)), area);
+}
+
+fn latency_status() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let left = crate::AUDIO_LATENCY_LEFT_US.load(Relaxed);
+    let right = crate::AUDIO_LATENCY_RIGHT_US.load(Relaxed);
+    let value = |us: u64| {
+        if us == 0 {
+            "--".to_string()
+        } else {
+            format!("{:.1}ms", us as f64 / 1000.0)
+        }
+    };
+    format!("lat L:{} R:{}", value(left), value(right))
 }
 
 fn format_vcf_status(vcf: crate::vcf::VcfSettings) -> String {

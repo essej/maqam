@@ -8,7 +8,9 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::Receiver;
 
-use crate::command::{SympatheticChange, SympatheticHarmony, SympatheticTarget, VcfChange};
+use crate::command::{
+    NamInput, SympatheticChange, SympatheticHarmony, SympatheticTarget, VcfChange,
+};
 use crate::fx::{FxProcessor, FxSettings};
 use crate::sequencer::{AudioCmd, ControlSpec, Phrase, SubdivEvent};
 use crate::sympathetics::SympatheticStrings;
@@ -61,6 +63,9 @@ enum PendingControl {
     Sustain(f64),
     Vcf(VcfChange),
     Fx(crate::command::FxChange),
+    NamEnabled(bool),
+    NamGain(f32),
+    NamInput(NamInput),
     Sympathetics(bool),
     SympatheticDecay(f32),
     SympatheticGain(f32),
@@ -388,7 +393,8 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
     let cfg = device.default_output_config()?;
     let sr = cfg.sample_rate().0 as f64;
     let ch = cfg.channels() as usize;
-    let (input_tx, input_rx) = crossbeam_channel::bounded::<f32>(16_384);
+    let (input_tx, input_rx) =
+        crossbeam_channel::bounded::<(cpal::StreamInstant, [f32; 2])>(16_384);
     let input_stream = host.default_input_device().and_then(|input_device| {
         let input_config = input_device.default_input_config().ok()?;
         if input_config.sample_format() != cpal::SampleFormat::F32 {
@@ -398,10 +404,12 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
         let stream = input_device
             .build_input_stream(
                 &input_config.into(),
-                move |data: &[f32], _| {
+                move |data: &[f32], info| {
+                    let captured_at = info.timestamp().capture;
                     for frame in data.chunks(input_channels.max(1)) {
-                        let mono = frame.iter().copied().sum::<f32>() / frame.len().max(1) as f32;
-                        let _ = input_tx.try_send(mono);
+                        let left = frame.first().copied().unwrap_or(0.0);
+                        let right = frame.get(1).copied().unwrap_or(left);
+                        let _ = input_tx.try_send((captured_at, [left, right]));
                     }
                 },
                 |_error| {},
@@ -430,11 +438,16 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
     let mut sympathetics = SympatheticBank::new(sr as f32);
     let mut sympathetic_phrase_id = None;
     let mut nam_model: Option<nam_rs::Model> = None;
+    let mut nam_enabled = true;
     let mut nam_gain = 1.0f32;
+    let mut nam_input = NamInput::Stereo;
+    let mut latency_test: Option<crossbeam_channel::Sender<Result<f64, String>>> = None;
+    let mut latency_ms_ema: Option<f64> = None;
 
     let stream = device.build_output_stream(
         &cfg.into(),
-        move |data: &mut [f32], _| {
+        move |data: &mut [f32], info| {
+            let playback_at = info.timestamp().playback;
             // ── drain commands ─────────────────────────────────────────────
             while let Ok(cmd) = rx.try_recv() {
                 match cmd {
@@ -482,9 +495,18 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     }
                     AudioCmd::SetNamModel(model) => {
                         nam_model = model;
+                        nam_enabled = nam_model.is_some();
+                    }
+                    AudioCmd::SetNamEnabled(enabled) => {
+                        nam_enabled = enabled;
                     }
                     AudioCmd::SetNamGain(gain) => {
                         nam_gain = gain.clamp(0.0, 8.0);
+                    }
+                    AudioCmd::SetNamInput(route) => nam_input = route,
+                    AudioCmd::MeasureInputLatency { input, result_tx } => {
+                        let _ = input;
+                        latency_test = Some(result_tx);
                     }
                     AudioCmd::SetVol(v) => {
                         vol = v;
@@ -633,6 +655,9 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                                 fx_processor.set_settings(setting);
                             }
                         }
+                        PendingControl::NamEnabled(enabled) => nam_enabled = enabled,
+                        PendingControl::NamGain(gain) => nam_gain = gain.clamp(0.0, 8.0),
+                        PendingControl::NamInput(route) => nam_input = route,
                         PendingControl::Sympathetics(enabled) => {
                             sympathetics_enabled = enabled;
                         }
@@ -710,9 +735,40 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 }
 
                 voices.retain(|v| !v.done);
-                let mut live_input = input_rx.try_recv().unwrap_or(0.0);
-                if let Some(model) = nam_model.as_mut() {
-                    live_input = model.process_sample(live_input * nam_gain);
+                let input_packet = input_rx.try_recv().ok();
+                let input = input_packet
+                    .map(|(_, samples)| samples)
+                    .unwrap_or([0.0, 0.0]);
+                if let Some((captured_at, _)) = input_packet {
+                    let measured_ms = playback_at
+                        .duration_since(&captured_at)
+                        .map(|duration| duration.as_secs_f64() * 1000.0);
+                    if let Some(measured_ms) = measured_ms {
+                        let smoothed = latency_ms_ema
+                            .map_or(measured_ms, |previous| previous * 0.9 + measured_ms * 0.1);
+                        latency_ms_ema = Some(smoothed);
+                        let latency_us = (smoothed * 1000.0).round().max(1.0) as u64;
+                        crate::AUDIO_LATENCY_LEFT_US
+                            .store(latency_us, std::sync::atomic::Ordering::Relaxed);
+                        crate::AUDIO_LATENCY_RIGHT_US
+                            .store(latency_us, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if let Some(result_tx) = latency_test.take() {
+                        let result = measured_ms.ok_or_else(|| {
+                            "audio device timestamps use incompatible clocks".to_string()
+                        });
+                        let _ = result_tx.send(result);
+                    }
+                }
+                let mut live_input = match nam_input {
+                    NamInput::Left => input[0],
+                    NamInput::Right => input[1],
+                    NamInput::Stereo => (input[0] + input[1]) * 0.5,
+                };
+                if nam_enabled {
+                    if let Some(model) = nam_model.as_mut() {
+                        live_input = model.process_sample(live_input * nam_gain);
+                    }
                 }
                 if voices.is_empty()
                     && !fx.active()
@@ -948,6 +1004,9 @@ fn tick_sequencer(
                 ControlSpec::SetSustain(v) => PendingControl::Sustain(v),
                 ControlSpec::SetVcf(v) => PendingControl::Vcf(v),
                 ControlSpec::SetFx(v) => PendingControl::Fx(v),
+                ControlSpec::SetNamEnabled(v) => PendingControl::NamEnabled(v),
+                ControlSpec::SetNamGain(v) => PendingControl::NamGain(v),
+                ControlSpec::SetNamInput(v) => PendingControl::NamInput(v),
                 ControlSpec::SetSympathetics(v) => PendingControl::Sympathetics(v),
                 ControlSpec::SetSympatheticDecay(v) => PendingControl::SympatheticDecay(v),
                 ControlSpec::SetSympatheticGain(v) => PendingControl::SympatheticGain(v),

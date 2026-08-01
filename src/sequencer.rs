@@ -3,7 +3,7 @@
 // Comma-separated ajnas form ONE combined scale (stacked, not sequential).
 // The melody walks through all frequencies of all ajnas together.
 
-use crate::command::{FxChange, SympatheticChange, VcfChange};
+use crate::command::{FxChange, NamInput, SympatheticChange, VcfChange};
 use crate::fx::FxSettings;
 use crate::synth::{expand_degrees, zigzag_walk};
 use crate::tuning::{snap_to_oud_lattice, Maqam, Pitch};
@@ -72,6 +72,9 @@ pub enum ControlSpec {
     SetSustain(f64),
     SetVcf(VcfChange),
     SetFx(FxChange),
+    SetNamEnabled(bool),
+    SetNamGain(f32),
+    SetNamInput(NamInput),
     SetSympathetics(bool),
     SetSympatheticDecay(f32),
     SetSympatheticGain(f32),
@@ -398,10 +401,16 @@ pub fn melody_walk(n: usize, peak: usize) -> Vec<usize> {
 pub enum AudioCmd {
     AddPhrase(Phrase),
     RemovePhrase(usize),
-    InsertPhrase { pos: usize, phrase: Phrase },
+    InsertPhrase {
+        pos: usize,
+        phrase: Phrase,
+    },
     ReplacePhrase(Phrase),
     Rotate,
-    MovePhrase { id: usize, down: bool },
+    MovePhrase {
+        id: usize,
+        down: bool,
+    },
     SetBpm(f64),
     SetSustain(f64),
     SetVcf(VcfChange),
@@ -409,7 +418,13 @@ pub enum AudioCmd {
     SetFx(FxChange),
     SetFxSettings(FxSettings),
     SetNamModel(Option<nam_rs::Model>),
+    SetNamEnabled(bool),
     SetNamGain(f32),
+    SetNamInput(NamInput),
+    MeasureInputLatency {
+        input: NamInput,
+        result_tx: crossbeam_channel::Sender<Result<f64, String>>,
+    },
     Clear,
     SetVol(f32),
     SetPaused(bool),

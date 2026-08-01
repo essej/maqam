@@ -259,7 +259,19 @@ nam https://example.com/amp.nam
                    download, cache, and load a NAM capture
 nam <name>         load a cached NAM capture on live mic input
 nam ls            list cached NAM captures and current-directory .nam files
+nam search <query>
+                  search the web for real NAM captures and direct downloads
+nam pin <URL> as <name>
+                  pin, download, and load one exact model; updates the loaded .mq
+nam tone3000 <tone-id> as <name>
+nam login
+nam logout
+                  pin a canonical TONE3000 tone and load its A2 model
 nam gain <n>      set NAM input gain before the amp model (0..8)
+nam input left|right|stereo
+                  select channel 1, channel 2, or an equal mono mix
+nam latency left|right
+                  compare device capture and predicted playback timestamps
 nam off           bypass the live-input NAM model
 q / quit           quit
 ? / help           show help
@@ -267,12 +279,30 @@ PageUp/PageDown    scroll the response pane
 ;                  separate multiple commands on one line
 ```
 
-NAM is live input state, not score state, so it is not saved in `.mq` files.
-The input chain is mic input -> NAM -> `vcf mic` or `vcf all`. Referenced
+NAM model, gain, bypass, and input-routing commands are numbered timeline rows:
+they can be moved, rotated, inserted, edited, saved, and scheduled. For example,
+`i 12 nam gain 6`, `edit 12 nam off`, or `edit 12 nam input right`.
+`nam pin URL as name` also replaces the score's ambiguous
+`nam name` line with the exact downloadable source. Other machines then fetch
+the same capture into their local cache when loading that score.
+`nam tone3000 ID as name` pins a canonical catalog identity instead. Set the
+publishable client ID from TONE3000 Settings → API Keys as `TONE3000_CLIENT_ID`,
+then run `nam login`. Maqam opens the system browser and waits for the OAuth
+callback on localhost in a background thread, so playback and the TUI continue.
+The credential is kept in the ignored, owner-only `.tone3000-auth.json` file and
+refreshed automatically; `nam logout` removes it. `TONE3000_ACCESS_TOKEN` remains
+available for headless use. An authenticated maqam-live resolves and downloads its A2 model via
+the authenticated TONE3000 API.
+The input chain is selected input -> NAM -> `vcf mic` or `vcf all`. `stereo`
+mixes both hardware channels equally before the mono NAM model. Referenced
 captures are cached in `./.nam` by default, or in `MAQAM_NAM_CACHE_DIR` when
 set. The cache directory is created automatically when listing, importing, or
 downloading captures. NAM models have an expected sample rate; set your audio
 device to that rate if the model sounds wrong.
+
+The TUI continuously displays CoreAudio's capture-to-predicted-playback timing
+as `lat L:<ms> R:<ms>`. Left and right are reported separately, though an
+interleaved hardware device will normally give both channels the same timestamp.
 
 ### Settings Entries
 

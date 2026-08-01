@@ -51,11 +51,25 @@ pub struct SympatheticChange {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NamCommand {
+    Login,
+    Logout,
     Load { path: String },
     Import { path: String, name: Option<String> },
+    Pin { url: String, name: String },
+    Tone3000 { tone_id: u64, name: String },
+    Search { query: String },
     List,
     Off,
     Gain(f32),
+    Input(NamInput),
+    Latency(NamInput),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NamInput {
+    Left,
+    Right,
+    Stereo,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -657,13 +671,15 @@ pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
         notes: &[],
     },
     LanguagePatternMetadata {
-        syntax: "nam import FILENAME.nam [as name] | nam import URL [as name] | nam <name|FILENAME.nam|URL> | nam load <name|FILENAME.nam|URL> | nam ls | nam off | nam gain <0..8>",
+        syntax: "nam login | nam logout | nam tone3000 ID as name | nam pin URL as name | nam import FILENAME.nam [as name] | nam input left|right|stereo | nam latency left|right | nam search <query> | nam <name|FILENAME.nam|URL> | nam load <name|FILENAME.nam|URL> | nam ls | nam off | nam gain <0..8>",
         description: "cache, load, list, or bypass Neural Amp Modeler A1/A2 captures on live mic input",
         notes: &[
-            "NAM is live input state and is not saved in .mq files",
+            "`nam pin URL as name` writes an unambiguous downloadable dependency into the loaded .mq file",
+            "`nam login` opens TONE3000 OAuth in a browser while the TUI keeps running; `nam logout` forgets it",
             "do not invent fake NAM paths; use a real local .nam file or URL",
             "import a capture once, then load it later by cached name",
             "`nam ls` browses cached captures plus .nam files in the current directory",
+            "`nam search Fender clean A2` searches for real capture pages and direct .nam links",
             "use `vcf mic` to filter the modeled input bus or `vcf all` to filter the final mix",
         ],
     },
@@ -913,6 +929,10 @@ pub enum Cmd {
         before: isize,
         change: FxChange,
     },
+    InsertNam {
+        before: isize,
+        command: NamCommand,
+    },
     InsertSympathetics {
         before: isize,
         enabled: bool,
@@ -957,6 +977,10 @@ pub enum Cmd {
     EditFx {
         id: isize,
         change: FxChange,
+    },
+    EditNam {
+        id: isize,
+        command: NamCommand,
     },
     EditSympathetics {
         id: isize,
@@ -1220,6 +1244,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             Cmd::SetSustain(change) => Ok(Cmd::EditSustain { id, change }),
             Cmd::SetVcf(change) => Ok(Cmd::EditVcf { id, change }),
             Cmd::SetFx(change) => Ok(Cmd::EditFx { id, change }),
+            Cmd::SetNam(command) => Ok(Cmd::EditNam { id, command }),
             Cmd::Sympathetics(enabled) => Ok(Cmd::EditSympathetics { id, enabled }),
             Cmd::SympatheticDecay(decay) => Ok(Cmd::EditSympatheticDecay { id, decay }),
             Cmd::SympatheticGain(gain) => Ok(Cmd::EditSympatheticGain { id, gain }),
@@ -1282,6 +1307,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             Cmd::SetSustain(change) => Ok(Cmd::InsertSustain { before, change }),
             Cmd::SetVcf(change) => Ok(Cmd::InsertVcf { before, change }),
             Cmd::SetFx(change) => Ok(Cmd::InsertFx { before, change }),
+            Cmd::SetNam(command) => Ok(Cmd::InsertNam { before, command }),
             Cmd::Sympathetics(enabled) => Ok(Cmd::InsertSympathetics { before, enabled }),
             Cmd::SympatheticDecay(decay) => Ok(Cmd::InsertSympatheticDecay { before, decay }),
             Cmd::SympatheticGain(gain) => Ok(Cmd::InsertSympatheticGain { before, gain }),
@@ -1345,8 +1371,22 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             .ok_or("usage: nam <cached-name|FILENAME.nam|URL> | nam import <FILENAME.nam|URL> [as name] | nam ls | nam off | nam gain <0..8>")?;
         let mut toks = rest.split_whitespace();
         match toks.next().unwrap_or("").to_ascii_lowercase().as_str() {
+            "login" => return Ok(Cmd::SetNam(NamCommand::Login)),
+            "logout" => return Ok(Cmd::SetNam(NamCommand::Logout)),
             "off" => return Ok(Cmd::SetNam(NamCommand::Off)),
             "ls" | "list" => return Ok(Cmd::SetNam(NamCommand::List)),
+            "search" | "find" => {
+                let query = rest
+                    .split_once(char::is_whitespace)
+                    .map(|(_, value)| value.trim())
+                    .filter(|value| !value.is_empty())
+                    .ok_or(
+                        "usage: nam search <amp, artist, or tone>; describe the capture to find",
+                    )?;
+                return Ok(Cmd::SetNam(NamCommand::Search {
+                    query: query.to_string(),
+                }));
+            }
             "import" | "pull" => {
                 let import_rest = rest
                     .split_once(char::is_whitespace)
@@ -1373,6 +1413,40 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
                 }
                 return Ok(Cmd::SetNam(NamCommand::Import { path, name }));
             }
+            "pin" | "require" => {
+                let pin_rest = rest
+                    .split_once(char::is_whitespace)
+                    .map(|(_, value)| value.trim())
+                    .filter(|value| !value.is_empty())
+                    .ok_or("usage: nam pin <direct-.nam-URL> as <name>")?;
+                let (url, name) = pin_rest
+                    .rsplit_once(" as ")
+                    .ok_or("usage: nam pin <direct-.nam-URL> as <name>")?;
+                if !url.starts_with("https://") && !url.starts_with("http://") {
+                    return Err("nam pin requires a direct http(s) model URL".into());
+                }
+                let name = name.trim();
+                if name.is_empty() {
+                    return Err("nam pin needs a stable name after `as`".into());
+                }
+                return Ok(Cmd::SetNam(NamCommand::Pin {
+                    url: url.trim().to_string(),
+                    name: name.to_string(),
+                }));
+            }
+            "tone3000" | "t3k" => {
+                let values = rest.split_whitespace().collect::<Vec<_>>();
+                if values.len() != 4 || values[2].to_ascii_lowercase() != "as" {
+                    return Err("usage: nam tone3000 <tone-id> as <name>".into());
+                }
+                let tone_id = values[1]
+                    .parse::<u64>()
+                    .map_err(|_| "TONE3000 tone ID must be a number")?;
+                return Ok(Cmd::SetNam(NamCommand::Tone3000 {
+                    tone_id,
+                    name: values[3].to_string(),
+                }));
+            }
             "gain" | "drive" => {
                 let value = toks
                     .next()
@@ -1386,6 +1460,23 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
                     ));
                 }
                 return Ok(Cmd::SetNam(NamCommand::Gain(gain)));
+            }
+            "input" | "in" => {
+                let route = match toks.next().unwrap_or("").to_ascii_lowercase().as_str() {
+                    "left" | "l" | "1" => NamInput::Left,
+                    "right" | "r" | "2" => NamInput::Right,
+                    "stereo" | "both" | "lr" => NamInput::Stereo,
+                    _ => return Err("usage: nam input <left|right|stereo>".into()),
+                };
+                return Ok(Cmd::SetNam(NamCommand::Input(route)));
+            }
+            "latency" => {
+                let route = match toks.next().unwrap_or("left").to_ascii_lowercase().as_str() {
+                    "left" | "l" | "1" => NamInput::Left,
+                    "right" | "r" | "2" => NamInput::Right,
+                    _ => return Err("usage: nam latency <left|right>".into()),
+                };
+                return Ok(Cmd::SetNam(NamCommand::Latency(route)));
             }
             "load" => {
                 let path = rest
