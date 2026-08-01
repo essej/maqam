@@ -41,11 +41,39 @@ pub struct SympatheticChange {
     pub decay: Option<f32>,
     pub gain: Option<f32>,
     pub interval_ratio: Option<f64>,
+    pub harmony: Option<SympatheticHarmony>,
     pub amount: Option<f32>,
     pub mic: Option<f32>,
     pub kanun: Option<f32>,
     pub bass: Option<f32>,
     pub drums: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SympatheticHarmonyComponent {
+    pub ratio: f64,
+    pub weight: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SympatheticHarmony {
+    pub components: [SympatheticHarmonyComponent; 8],
+    pub len: usize,
+}
+
+impl SympatheticHarmony {
+    fn push(&mut self, component: SympatheticHarmonyComponent) -> Result<(), String> {
+        if self.len >= self.components.len() {
+            return Err("sym harmony can contain at most 8 intervals".into());
+        }
+        self.components[self.len] = component;
+        self.len += 1;
+        Ok(())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = SympatheticHarmonyComponent> + '_ {
+        self.components[..self.len].iter().copied()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,6 +303,7 @@ const SYM_PARAMETERS: &[CommandParameterMetadata] = &[
         typical: "third, fourth, fifth, octave",
         notes: &[
             "`sym down <interval>` uses the reciprocal interval",
+            "`sym harmony root third fourth octave` combines weighted target intervals",
             "explicit ratios are accepted, e.g. `sym interval 3/2`",
             "third and sixth quality matters; use minor-third/major-third or minor-sixth/major-sixth",
         ],
@@ -476,6 +505,15 @@ pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
             "named intervals use ideal ratios: minor-third=6/5, major-third=5/4, fourth=4/3, fifth=3/2, octave=2/1",
             "generic third means minor-third; use major-third when the harmony needs 5/4",
             "explicit ratios like `sym interval 3/2` are accepted",
+        ],
+    },
+    LanguagePatternMetadata {
+        syntax: "sym harmony <interval> [weight] [interval weight ...]",
+        description: "combine multiple sympathetic target harmonies with weighted energy",
+        notes: &[
+            "example: `sym harmony root third fourth octave`",
+            "example with explicit split: `sym harmony root 0.50 third 0.25 fifth 0.25`",
+            "weights are normalized to a total energy of 1.0 before retuning",
         ],
     },
     LanguagePatternMetadata {
@@ -1475,6 +1513,12 @@ fn parse_sympathetic_change(input: &str) -> Result<SympatheticChange, String> {
                 change.interval_ratio = Some(parse_sym_interval_ratio(rest.get(i).copied(), usage)?);
                 i += 1;
             }
+            "harmony" | "harm" | "chord" => {
+                i += 1;
+                let (harmony, consumed) = parse_sym_harmony(&rest[i..], usage)?;
+                change.harmony = Some(harmony);
+                i += consumed;
+            }
             "mic" | "input" | "live" => {
                 i += 1;
                 change.mic = Some(parse_sym_gain(rest.get(i).copied(), usage)?);
@@ -1520,7 +1564,40 @@ fn is_sym_setting_token(token: &str) -> bool {
             | "down"
             | "interval"
             | "transpose"
+            | "harmony"
+            | "harm"
+            | "chord"
     )
+}
+
+fn parse_sym_harmony(tokens: &[&str], usage: &str) -> Result<(SympatheticHarmony, usize), String> {
+    let mut harmony = SympatheticHarmony::default();
+    let mut i = 0usize;
+    while i < tokens.len() {
+        let token = tokens[i].to_ascii_lowercase();
+        if is_sym_setting_token(&token) && harmony.len > 0 {
+            break;
+        }
+        let ratio = parse_sym_interval_ratio(Some(tokens[i]), usage)?;
+        i += 1;
+        let mut weight = 1.0f32;
+        if let Some(next) = tokens.get(i) {
+            if !is_sym_setting_token(next) {
+                if let Ok(parsed) = next.parse::<f32>() {
+                    if !(0.0..=512.0).contains(&parsed) {
+                        return Err("sym harmony weight out of range 0..512".into());
+                    }
+                    weight = parsed;
+                    i += 1;
+                }
+            }
+        }
+        harmony.push(SympatheticHarmonyComponent { ratio, weight })?;
+    }
+    if harmony.len == 0 {
+        return Err(usage.to_string());
+    }
+    Ok((harmony, i))
 }
 
 fn parse_sym_interval_ratio(value: Option<&str>, usage: &str) -> Result<f64, String> {
@@ -1538,7 +1615,7 @@ fn parse_sym_interval_ratio(value: Option<&str>, usage: &str) -> Result<f64, Str
     }
     let normalized = token.replace(['-', '_', ' '], "");
     let ratio = match normalized.as_str() {
-        "unison" | "root" => 1.0,
+        "unison" | "root" | "fundamental" | "f0" => 1.0,
         "minorsecond" | "minor2" | "m2" | "b2" | "semitone" | "halfstep" => 16.0 / 15.0,
         "second" | "majorsecond" | "major2" | "wholestep" | "whole" => 9.0 / 8.0,
         "third" | "minorthird" | "minor3" | "min3" | "m3" | "b3" => 6.0 / 5.0,

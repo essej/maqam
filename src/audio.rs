@@ -8,7 +8,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::Receiver;
 
-use crate::command::{SympatheticChange, SympatheticTarget, VcfChange};
+use crate::command::{SympatheticChange, SympatheticHarmony, SympatheticTarget, VcfChange};
 use crate::fx::{FxProcessor, FxSettings};
 use crate::sequencer::{AudioCmd, ControlSpec, Phrase, SubdivEvent};
 use crate::sympathetics::SympatheticStrings;
@@ -97,6 +97,7 @@ struct SympatheticBank {
     drums: SympatheticPartition,
     target_frequencies: Vec<f64>,
     interval_ratio: f64,
+    harmony: Option<SympatheticHarmony>,
 }
 
 impl SympatheticBank {
@@ -108,6 +109,7 @@ impl SympatheticBank {
             drums: SympatheticPartition::new(sr, 0.0),
             target_frequencies: Vec::new(),
             interval_ratio: 1.0,
+            harmony: None,
         }
     }
 
@@ -117,15 +119,39 @@ impl SympatheticBank {
     }
 
     fn apply_targets(&mut self) {
-        let shifted: Vec<f64> = self
-            .target_frequencies
-            .iter()
-            .map(|frequency| frequency * self.interval_ratio)
-            .collect();
-        self.mic.strings.set_targets(&shifted);
-        self.kanun.strings.set_targets(&shifted);
-        self.bass.strings.set_targets(&shifted);
-        self.drums.strings.set_targets(&shifted);
+        if let Some(harmony) = self.harmony {
+            let total_weight: f32 = harmony
+                .iter()
+                .map(|component| component.weight.max(0.0))
+                .sum::<f32>()
+                .max(1.0);
+            let weighted: Vec<(f64, f32)> = self
+                .target_frequencies
+                .iter()
+                .flat_map(|frequency| {
+                    harmony.iter().map(move |component| {
+                        (
+                            frequency * component.ratio,
+                            component.weight.max(0.0) / total_weight,
+                        )
+                    })
+                })
+                .collect();
+            self.mic.strings.set_weighted_targets(&weighted);
+            self.kanun.strings.set_weighted_targets(&weighted);
+            self.bass.strings.set_weighted_targets(&weighted);
+            self.drums.strings.set_weighted_targets(&weighted);
+        } else {
+            let shifted: Vec<f64> = self
+                .target_frequencies
+                .iter()
+                .map(|frequency| frequency * self.interval_ratio)
+                .collect();
+            self.mic.strings.set_targets(&shifted);
+            self.kanun.strings.set_targets(&shifted);
+            self.bass.strings.set_targets(&shifted);
+            self.drums.strings.set_targets(&shifted);
+        }
     }
 
     fn has_energy(&self) -> bool {
@@ -185,6 +211,11 @@ impl SympatheticBank {
         }
         if let Some(ratio) = change.interval_ratio {
             self.interval_ratio = ratio;
+            self.harmony = None;
+            self.apply_targets();
+        }
+        if let Some(harmony) = change.harmony {
+            self.harmony = Some(harmony);
             self.apply_targets();
         }
     }

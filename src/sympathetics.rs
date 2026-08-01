@@ -40,7 +40,6 @@ impl SympatheticStrings {
     }
 
     pub fn set_targets(&mut self, frequencies: &[f64]) {
-        let mut targets: Vec<(f32, f32)> = Vec::new();
         let mut string_frequencies = frequencies.to_vec();
         if let Some(&tonic) = frequencies.first() {
             // Taraf strings prominently reinforce the tonic, fourth, and
@@ -49,7 +48,20 @@ impl SympatheticStrings {
             string_frequencies.push(tonic * 4.0 / 3.0);
             string_frequencies.push(tonic * 3.0 / 2.0);
         }
-        for frequency in string_frequencies {
+        let weighted: Vec<_> = string_frequencies
+            .into_iter()
+            .map(|frequency| (frequency, 1.0))
+            .collect();
+        self.set_weighted_targets(&weighted);
+    }
+
+    pub fn set_weighted_targets(&mut self, frequencies: &[(f64, f32)]) {
+        let mut targets: Vec<(f32, f32)> = Vec::new();
+        for &(frequency, target_weight) in frequencies {
+            let target_weight = target_weight.max(0.0);
+            if target_weight <= f32::EPSILON {
+                continue;
+            }
             let mut hz = frequency as f32;
             // Keep the sympathetic bank well above the main instrument's body:
             // its lowest course lives in the 320–640 Hz octave.
@@ -77,11 +89,12 @@ impl SympatheticStrings {
                 if partial > 4_500.0 {
                     continue;
                 }
+                let coupling = coupling * target_weight;
                 if let Some(existing) = targets
                     .iter_mut()
                     .find(|(other, _)| 1200.0 * (partial / *other).log2().abs() < 8.0)
                 {
-                    existing.1 = existing.1.max(coupling);
+                    existing.1 += coupling;
                 } else {
                     targets.push((partial, coupling));
                 }

@@ -3679,6 +3679,13 @@ fn sym_change_src(change: command::SympatheticChange) -> String {
             parts.push(sym_interval_name(ratio));
         }
     }
+    if let Some(harmony) = change.harmony {
+        parts.push("harmony".to_string());
+        for component in harmony.iter() {
+            parts.push(sym_harmony_interval_name(component.ratio));
+            parts.push(format!("{:.2}", component.weight));
+        }
+    }
     if let Some(amount) = change.amount {
         parts.push("amount".to_string());
         parts.push(format!("{amount}"));
@@ -3724,6 +3731,14 @@ fn sym_interval_name(ratio: f64) -> String {
             ((ratio - known_ratio).abs() < 0.000_001).then_some((*name).to_string())
         })
         .unwrap_or_else(|| format!("{ratio:.5}"))
+}
+
+fn sym_harmony_interval_name(ratio: f64) -> String {
+    if (ratio - 1.0).abs() < 0.000_001 {
+        "root".to_string()
+    } else {
+        sym_interval_name(ratio)
+    }
 }
 
 fn value_change_src(change: ValueChange) -> String {
@@ -3980,6 +3995,24 @@ mod tests {
             panic!("expected interval sym control");
         };
         assert_eq!(change.interval_ratio, Some(3.0 / 2.0));
+
+        app.handle_command("edit 5 sym harmony root 0.50 third 0.25 fifth 0.25");
+        assert_eq!(
+            app.phrases[4].src,
+            "sym harmony root 0.50 third 0.25 fifth 0.25"
+        );
+        let Some(ControlSpec::SetSympathetic(change)) = app.phrases[4].control else {
+            panic!("expected harmony sym control");
+        };
+        let harmony = change.harmony.expect("expected harmony");
+        assert_eq!(harmony.len, 3);
+        let components: Vec<_> = harmony.iter().collect();
+        assert!((components[0].ratio - 1.0).abs() < f64::EPSILON);
+        assert!((components[0].weight - 0.5).abs() < f32::EPSILON);
+        assert!((components[1].ratio - 6.0 / 5.0).abs() < f64::EPSILON);
+        assert!((components[1].weight - 0.25).abs() < f32::EPSILON);
+        assert!((components[2].ratio - 3.0 / 2.0).abs() < f64::EPSILON);
+        assert!((components[2].weight - 0.25).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -4032,6 +4065,19 @@ mod tests {
                 ..
             }) if (ratio - 3.0 / 2.0).abs() < f64::EPSILON
         ));
+
+        let parsed = command::parse("sym harmony root third fourth octave").unwrap();
+        let Cmd::Sympathetic(change) = parsed else {
+            panic!("expected sym harmony command");
+        };
+        let harmony = change.harmony.expect("expected harmony");
+        assert_eq!(harmony.len, 4);
+        let components: Vec<_> = harmony.iter().collect();
+        assert!((components[0].ratio - 1.0).abs() < f64::EPSILON);
+        assert!((components[0].weight - 1.0).abs() < f32::EPSILON);
+        assert!((components[1].ratio - 6.0 / 5.0).abs() < f64::EPSILON);
+        assert!((components[2].ratio - 4.0 / 3.0).abs() < f64::EPSILON);
+        assert!((components[3].ratio - 2.0).abs() < f64::EPSILON);
     }
 
     #[test]
