@@ -62,7 +62,7 @@ pub struct SympatheticHarmony {
 }
 
 impl SympatheticHarmony {
-    fn push(&mut self, component: SympatheticHarmonyComponent) -> Result<(), String> {
+    pub(crate) fn push(&mut self, component: SympatheticHarmonyComponent) -> Result<(), String> {
         if self.len >= self.components.len() {
             return Err("sym harmony can contain at most 8 intervals".into());
         }
@@ -513,6 +513,7 @@ pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
         notes: &[
             "example: `sym harmony root third fourth octave`",
             "example with explicit split: `sym harmony root 0.50 third 0.25 fifth 0.25`",
+            "default behavior is equivalent to `sym harmony root 1.0`",
             "weights are normalized to a total energy of 1.0 before retuning",
         ],
     },
@@ -1510,7 +1511,8 @@ fn parse_sympathetic_change(input: &str) -> Result<SympatheticChange, String> {
             }
             "interval" | "transpose" => {
                 i += 1;
-                change.interval_ratio = Some(parse_sym_interval_ratio(rest.get(i).copied(), usage)?);
+                change.interval_ratio =
+                    Some(parse_sym_interval_ratio(rest.get(i).copied(), usage)?);
                 i += 1;
             }
             "harmony" | "harm" | "chord" => {
@@ -1551,8 +1553,7 @@ fn parse_sympathetic_change(input: &str) -> Result<SympatheticChange, String> {
 fn is_sym_setting_token(token: &str) -> bool {
     matches!(
         token.to_ascii_lowercase().as_str(),
-        "on"
-            | "off"
+        "on" | "off"
             | "decay"
             | "gain"
             | "drive"

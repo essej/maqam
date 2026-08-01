@@ -131,16 +131,47 @@ jumps, repeat counters, and playback position are all explicit.
 
 The `sym` sympathetic-strings box is the first effect in this direction. Live
 audio supplies energy, while the score determines which virtual strings can
-accept that energy. The active phrase tunes them one octave above the played
-register, using its exact JI pitches plus tonic-related fourth and fifth
-courses. On a phrase change, newly tuned strings
-begin accepting energy, while strings already ringing retain their accumulated
-energy and decay audibly to zero. The effect therefore follows the composition
-without estimating its structure from the input signal.
+accept that energy. By default it behaves like:
+
+```text
+sym harmony root 1.0
+```
+
+That means the active phrase retunes the sympathetic bank to the phrase's exact
+JI pitches, lifted into the string register. On a phrase change, newly tuned
+strings begin accepting energy, while strings already ringing retain their
+accumulated energy and decay audibly to zero. The effect therefore follows the
+composition without estimating its structure from the input signal.
+
+### Weighted Sympathetic Harmony
+
+The unusual part is that `sym` can distribute one unit of resonator energy
+across JI harmonic targets:
+
+```text
+sym harmony root 0.50 third 0.25 fifth 0.25
+```
+
+This sends half of the sympathetic target energy to the written pitch, one
+quarter to the just minor third above it (`6/5 * f0`), and one quarter to the
+just fifth (`3/2 * f0`). The weights are normalized to a total of `1.0`, so this
+is a harmonic distribution, not a gain boost.
+
+You can also use `major-third` for `5/4 * f0`, `fourth` for `4/3 * f0`,
+`octave` for `2/1 * f0`, or an explicit ratio:
+
+```text
+sym harmony root 0.40 major-third 0.20 fourth 0.20 octave 0.20
+sym harmony root 0.50 5/4 0.25 3/2 0.25
+```
+
+This gives just intonation the behavior of a synth voice or resonator bank:
+instead of only exciting the fundamental, the score can decide how sympathetic
+energy is split into harmonic intervals for the current phrase.
 
 The string model uses harmonic metal-string courses, jawari-like nonlinear
 bridge coloration, and independent slow pitch drift around each exact JI
-center. Future score vocabulary can expose sympathetic level, timbre,
+center. Score vocabulary can expose sympathetic target harmony, level, timbre,
 modulation, and freeze as timeline controls rather than requiring pedal-state
 automation outside the composition.
 
@@ -208,6 +239,8 @@ sym gain <n>       set live-input excitation gain (0..512; default 2)
 sym drive <n>      alias for sym gain
 sym decay <n> drive <n> kanun <n> bass <n>
                    combined sym settings; omitted values stay unchanged
+sym harmony root 0.50 third 0.25 fifth 0.25
+                   split sympathetic target energy across JI harmonic targets
 sym <mic|kanun|bass|drums> decay <n> drive <n> amount <n>
                    per-source sympathetic partition settings
 vcf sym ...        filter the sympathetic-string instrument bus

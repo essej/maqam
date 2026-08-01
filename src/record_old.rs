@@ -1206,8 +1206,7 @@ pub fn record_cycle(
                         } else {
                             format!("{ctr:<status_width$} {:<28} {}  {}", label, rhy, ratios)
                         };
-                        let text =
-                            format!("{row_guard}{color}{id}{marker}{jump_prefix}{body}");
+                        let text = format!("{row_guard}{color}{id}{marker}{jump_prefix}{body}");
                         let text = preserve_row_spaces(text);
                         writeln!(f, "Dialogue: 2,{ts0},{ts1},Line,,0,0,{margin_v},,{text}")?;
                     }
@@ -1222,8 +1221,7 @@ pub fn record_cycle(
                                 label, rhythm_plain, ratios
                             )
                         };
-                        let text =
-                            format!("{row_guard}{color}{id}{marker}{jump_prefix}{body}");
+                        let text = format!("{row_guard}{color}{id}{marker}{jump_prefix}{body}");
                         let text = preserve_row_spaces(text);
                         writeln!(f, "Dialogue: 2,{ts0},{t1},Line,,0,0,{margin_v},,{text}")?;
                     }
@@ -1239,8 +1237,7 @@ pub fn record_cycle(
                     } else {
                         format!("{ctr} {:<28} {}  {}", label, rhythm, ratios)
                     };
-                    let text =
-                        format!("{row_guard}{color}{id}{marker}{jump_prefix}{body}");
+                    let text = format!("{row_guard}{color}{id}{marker}{jump_prefix}{body}");
                     let text = preserve_row_spaces(text);
                     writeln!(f, "Dialogue: 2,{t0},{t1},Line,,0,0,{margin_v},,{text}")?;
                 }

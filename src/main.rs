@@ -77,7 +77,9 @@ fn run_cli(commands: Vec<String>) -> anyhow::Result<()> {
             eprintln!(
                 "audio output unavailable ({err}); continuing command mode without live playback"
             );
-            eprintln!("to hear live playback, run maqam-live in an environment with an audio device");
+            eprintln!(
+                "to hear live playback, run maqam-live in an environment with an audio device"
+            );
             None
         }
     };

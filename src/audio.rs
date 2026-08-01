@@ -120,23 +120,7 @@ impl SympatheticBank {
 
     fn apply_targets(&mut self) {
         if let Some(harmony) = self.harmony {
-            let total_weight: f32 = harmony
-                .iter()
-                .map(|component| component.weight.max(0.0))
-                .sum::<f32>()
-                .max(1.0);
-            let weighted: Vec<(f64, f32)> = self
-                .target_frequencies
-                .iter()
-                .flat_map(|frequency| {
-                    harmony.iter().map(move |component| {
-                        (
-                            frequency * component.ratio,
-                            component.weight.max(0.0) / total_weight,
-                        )
-                    })
-                })
-                .collect();
+            let weighted = self.weighted_targets(harmony);
             self.mic.strings.set_weighted_targets(&weighted);
             self.kanun.strings.set_weighted_targets(&weighted);
             self.bass.strings.set_weighted_targets(&weighted);
@@ -152,6 +136,25 @@ impl SympatheticBank {
             self.bass.strings.set_targets(&shifted);
             self.drums.strings.set_targets(&shifted);
         }
+    }
+
+    fn weighted_targets(&self, harmony: SympatheticHarmony) -> Vec<(f64, f32)> {
+        let total_weight: f32 = harmony
+            .iter()
+            .map(|component| component.weight.max(0.0))
+            .sum::<f32>()
+            .max(1.0);
+        self.target_frequencies
+            .iter()
+            .flat_map(|frequency| {
+                harmony.iter().map(move |component| {
+                    (
+                        frequency * component.ratio,
+                        component.weight.max(0.0) / total_weight,
+                    )
+                })
+            })
+            .collect()
     }
 
     fn has_energy(&self) -> bool {
@@ -1070,5 +1073,49 @@ fn vcf_target_for_kind(kind: VoiceKind) -> Option<VcfTarget> {
         VoiceKind::MelodyFm => Some(VcfTarget::Kanun),
         VoiceKind::FloorTom => Some(VcfTarget::Kick),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::{SympatheticHarmony, SympatheticHarmonyComponent};
+
+    #[test]
+    fn sympathetic_harmony_weights_are_normalized() {
+        let mut bank = SympatheticBank::new(48_000.0);
+        bank.set_targets(&[220.0]);
+        let mut harmony = SympatheticHarmony::default();
+        harmony
+            .push(SympatheticHarmonyComponent {
+                ratio: 1.0,
+                weight: 0.50,
+            })
+            .unwrap();
+        harmony
+            .push(SympatheticHarmonyComponent {
+                ratio: 6.0 / 5.0,
+                weight: 0.25,
+            })
+            .unwrap();
+        harmony
+            .push(SympatheticHarmonyComponent {
+                ratio: 3.0 / 2.0,
+                weight: 0.25,
+            })
+            .unwrap();
+
+        let weighted = bank.weighted_targets(harmony);
+
+        assert_eq!(weighted.len(), 3);
+        assert!((weighted[0].0 - 220.0).abs() < f64::EPSILON);
+        assert!((weighted[0].1 - 0.50).abs() < f32::EPSILON);
+        assert!((weighted[1].0 - 264.0).abs() < f64::EPSILON);
+        assert!((weighted[1].1 - 0.25).abs() < f32::EPSILON);
+        assert!((weighted[2].0 - 330.0).abs() < f64::EPSILON);
+        assert!((weighted[2].1 - 0.25).abs() < f32::EPSILON);
+        assert!(
+            (weighted.iter().map(|(_, weight)| weight).sum::<f32>() - 1.0).abs() < f32::EPSILON
+        );
     }
 }
