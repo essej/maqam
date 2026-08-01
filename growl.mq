@@ -4,8 +4,9 @@ create hijaz2 8/9 1/1 15/14 6/5 4/3 3/2
 create saba2 8/9 1/1 13/12 6/5 5/4 11/8 3/2
 B|0|180
 Y|8|sym on
-Y|9|sym kanun decay 0.9999 drive 4
-V|11|vcf all cut 2500 res 0.98 drive 2
+Y|12|sym harmony root 0.50 third 0.25 fifth 0.10 octave 0.15
+Y|9|sym kanun decay 0.999 drive 1
+V|11|vcf all cut 2500 res 0.98 drive 1
 S|1|2
 P|2|3|g hijaz 4444
 P|4|1|g bayati 332332

@@ -653,8 +653,14 @@ pub fn record_cycle(
                 filters.reset();
                 if render_fx.active() {
                     let (l, r) = fx_processor.process(0.0, 0.0);
-                    left_buf.push(l);
-                    right_buf.push(r);
+                    let (l, r) = crate::analog::soft_clip_stereo(l, r);
+                    let (l, r) = if render_vcf.all.enabled {
+                        filters.all.process(l, r)
+                    } else {
+                        (l, r)
+                    };
+                    left_buf.push(l.clamp(-1.0, 1.0));
+                    right_buf.push(r.clamp(-1.0, 1.0));
                 } else {
                     left_buf.push(0.0);
                     right_buf.push(0.0);
@@ -662,7 +668,6 @@ pub fn record_cycle(
                 continue;
             }
             let (mut dry_l, mut dry_r) = (0f32, 0f32);
-            let (mut all_l, mut all_r) = (0f32, 0f32);
             let (mut mic_l, mut mic_r) = (0f32, 0f32);
             let (mut bass_l, mut bass_r) = (0f32, 0f32);
             let (mut kanun_l, mut kanun_r) = (0f32, 0f32);
@@ -670,7 +675,7 @@ pub fn record_cycle(
             let (mut tanbura_l, mut tanbura_r) = (0f32, 0f32);
             for v in voices.iter_mut() {
                 let setting = if render_vcf.all.enabled {
-                    Some(render_vcf.all)
+                    None
                 } else {
                     vcf_target_for_kind(v.kind).and_then(|target| {
                         let setting = render_vcf.get(target);
@@ -689,10 +694,7 @@ pub fn record_cycle(
                 let l = s * angle.cos();
                 let r = s * angle.sin();
                 match setting.map(|setting| setting.target) {
-                    Some(VcfTarget::All) => {
-                        all_l += l;
-                        all_r += r;
-                    }
+                    Some(VcfTarget::All) => unreachable!("master VCF is applied after mix"),
                     Some(VcfTarget::Mic) => {
                         mic_l += l;
                         mic_r += r;
@@ -720,11 +722,7 @@ pub fn record_cycle(
                 }
             }
             let (mut l, mut r) = (dry_l, dry_r);
-            if render_vcf.all.enabled {
-                let filtered = filters.all.process(all_l, all_r);
-                l += filtered.0;
-                r += filtered.1;
-            } else {
+            if !render_vcf.all.enabled {
                 if render_vcf.mic.enabled {
                     let filtered = filters.mic.process(mic_l, mic_r);
                     l += filtered.0;
@@ -752,14 +750,18 @@ pub fn record_cycle(
                 }
             }
             let (l, r) = if render_fx.active() {
-                let (fx_l, fx_r) = crate::analog::soft_clip_stereo(l, r);
-                fx_processor.process(fx_l, fx_r)
+                fx_processor.process(l, r)
             } else {
-                crate::analog::soft_clip_stereo(l, r)
+                (l, r)
             };
             let (l, r) = crate::analog::soft_clip_stereo(l, r);
-            left_buf.push(l);
-            right_buf.push(r);
+            let (l, r) = if render_vcf.all.enabled {
+                filters.all.process(l, r)
+            } else {
+                (l, r)
+            };
+            left_buf.push(l.clamp(-1.0, 1.0));
+            right_buf.push(r.clamp(-1.0, 1.0));
             voices.retain(|v| !v.done);
         }
         crate::REC_SAMPLES_DONE.store(
@@ -784,8 +786,14 @@ pub fn record_cycle(
             filters.reset();
             if tail_fx.active() {
                 let (l, r) = fx_processor.process(0.0, 0.0);
-                left_buf.push(l);
-                right_buf.push(r);
+                let (l, r) = crate::analog::soft_clip_stereo(l, r);
+                let (l, r) = if tail_vcf.all.enabled {
+                    filters.all.process(l, r)
+                } else {
+                    (l, r)
+                };
+                left_buf.push(l.clamp(-1.0, 1.0));
+                right_buf.push(r.clamp(-1.0, 1.0));
             } else {
                 left_buf.push(0.0);
                 right_buf.push(0.0);
@@ -793,7 +801,6 @@ pub fn record_cycle(
             continue;
         }
         let (mut dry_l, mut dry_r) = (0f32, 0f32);
-        let (mut all_l, mut all_r) = (0f32, 0f32);
         let (mut mic_l, mut mic_r) = (0f32, 0f32);
         let (mut bass_l, mut bass_r) = (0f32, 0f32);
         let (mut kanun_l, mut kanun_r) = (0f32, 0f32);
@@ -801,7 +808,7 @@ pub fn record_cycle(
         let (mut tanbura_l, mut tanbura_r) = (0f32, 0f32);
         for v in voices.iter_mut() {
             let setting = if tail_vcf.all.enabled {
-                Some(tail_vcf.all)
+                None
             } else {
                 vcf_target_for_kind(v.kind).and_then(|target| {
                     let setting = tail_vcf.get(target);
@@ -820,10 +827,7 @@ pub fn record_cycle(
             let l = s * angle.cos();
             let r = s * angle.sin();
             match setting.map(|setting| setting.target) {
-                Some(VcfTarget::All) => {
-                    all_l += l;
-                    all_r += r;
-                }
+                Some(VcfTarget::All) => unreachable!("master VCF is applied after mix"),
                 Some(VcfTarget::Mic) => {
                     mic_l += l;
                     mic_r += r;
@@ -851,11 +855,7 @@ pub fn record_cycle(
             }
         }
         let (mut l, mut r) = (dry_l, dry_r);
-        if tail_vcf.all.enabled {
-            let filtered = filters.all.process(all_l, all_r);
-            l += filtered.0;
-            r += filtered.1;
-        } else {
+        if !tail_vcf.all.enabled {
             if tail_vcf.mic.enabled {
                 let filtered = filters.mic.process(mic_l, mic_r);
                 l += filtered.0;
@@ -883,14 +883,18 @@ pub fn record_cycle(
             }
         }
         let (l, r) = if tail_fx.active() {
-            let (fx_l, fx_r) = crate::analog::soft_clip_stereo(l, r);
-            fx_processor.process(fx_l, fx_r)
+            fx_processor.process(l, r)
         } else {
-            crate::analog::soft_clip_stereo(l, r)
+            (l, r)
         };
         let (l, r) = crate::analog::soft_clip_stereo(l, r);
-        left_buf.push(l);
-        right_buf.push(r);
+        let (l, r) = if tail_vcf.all.enabled {
+            filters.all.process(l, r)
+        } else {
+            (l, r)
+        };
+        left_buf.push(l.clamp(-1.0, 1.0));
+        right_buf.push(r.clamp(-1.0, 1.0));
         voices.retain(|v| !v.done);
     }
     let peak = left_buf

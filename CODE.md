@@ -164,7 +164,9 @@ each output frame:
 5. mix active voices into dry/per-target buses
 6. process enabled VCF slots
 7. process FX
-8. clamp, apply volume, and write output samples
+8. apply volume and analog soft clipping
+9. process `vcf all` as the master filter when enabled
+10. clamp and write output samples
 
 The audio callback avoids blocking operations. It does allocate in a few places
 that are worth watching, most notably cloning the scale when spawning voices.
@@ -192,8 +194,9 @@ Defines VCF/VCO data and the filter implementation:
 - `MoogLadder`
 
 `VcfBank` has slots for `all`, `mic`, `bass`, `kanun`, `drums`, and `sym`.
-`all` is a master filter. Per-item slots filter only matching input or
-`VoiceKind` groups. `all` and per-item modes are mutually exclusive by design.
+`all` is a master filter over the final saturated stereo waveform. Per-item
+slots filter only matching input or `VoiceKind` groups before FX and saturation.
+`all` and per-item modes are mutually exclusive by design.
 
 `advance_tick` applies per-tick automation to enabled slots.
 

@@ -718,7 +718,6 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 }
 
                 let (mut dry_left, mut dry_right) = (0f32, 0f32);
-                let (mut all_left, mut all_right) = (0f32, 0f32);
                 let (mut mic_left, mut mic_right) = (0f32, 0f32);
                 let (mut bass_left, mut bass_right) = (0f32, 0f32);
                 let (mut kanun_left, mut kanun_right) = (0f32, 0f32);
@@ -729,7 +728,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 let mut sym_drums_input = 0.0f32;
                 for v in voices.iter_mut() {
                     let setting = if vcf.all.enabled {
-                        Some(vcf.all)
+                        None
                     } else {
                         vcf_target_for_kind(v.kind).and_then(|target| {
                             let setting = vcf.get(target);
@@ -757,10 +756,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         VoiceKind::PhraseChange => {}
                     }
                     match setting.map(|setting| setting.target) {
-                        Some(VcfTarget::All) => {
-                            all_left += left;
-                            all_right += right;
-                        }
+                        Some(VcfTarget::All) => unreachable!("master VCF is applied after mix"),
                         Some(VcfTarget::Mic) => {
                             dry_left += left;
                             dry_right += right;
@@ -801,15 +797,15 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     sympathetics.process(false, 0.0, 0.0, 0.0, 0.0)
                 };
                 if vcf.all.enabled {
-                    all_left += live_input;
-                    all_right += live_input;
+                    dry_left += live_input;
+                    dry_right += live_input;
                 } else if vcf.mic.enabled {
                     mic_left += live_input;
                     mic_right += live_input;
                 }
                 if vcf.all.enabled {
-                    all_left += sympathetic;
-                    all_right += sympathetic;
+                    dry_left += sympathetic;
+                    dry_right += sympathetic;
                 } else if vcf.tanbura.enabled {
                     tanbura_left += sympathetic;
                     tanbura_right += sympathetic;
@@ -818,11 +814,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     dry_right += sympathetic;
                 }
                 let (mut left, mut right) = (dry_left, dry_right);
-                if vcf.all.enabled {
-                    let filtered = vcf_filters.all.process(all_left, all_right);
-                    left += filtered.0;
-                    right += filtered.1;
-                } else {
+                if !vcf.all.enabled {
                     if vcf.mic.enabled {
                         let filtered = vcf_filters.mic.process(mic_left, mic_right);
                         left += filtered.0;
@@ -855,8 +847,14 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     right = processed.1;
                 }
                 let saturated = crate::analog::soft_clip_stereo(left * vol, right * vol);
-                left = saturated.0.clamp(-1.0, 1.0);
-                right = saturated.1.clamp(-1.0, 1.0);
+                if vcf.all.enabled {
+                    let filtered = vcf_filters.all.process(saturated.0, saturated.1);
+                    left = filtered.0.clamp(-1.0, 1.0);
+                    right = filtered.1.clamp(-1.0, 1.0);
+                } else {
+                    left = saturated.0.clamp(-1.0, 1.0);
+                    right = saturated.1.clamp(-1.0, 1.0);
+                }
 
                 if frame.len() >= 2 {
                     frame[0] = left;
