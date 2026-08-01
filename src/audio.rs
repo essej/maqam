@@ -57,14 +57,14 @@ impl PlayingPhrase {
 
 #[derive(Clone, Copy)]
 enum PendingControl {
-    SetBpm(f64),
-    SetSustain(f64),
-    SetVcf(VcfChange),
-    SetFx(crate::command::FxChange),
-    SetSympathetics(bool),
-    SetSympatheticDecay(f32),
-    SetSympatheticGain(f32),
-    SetSympathetic(SympatheticChange),
+    Bpm(f64),
+    Sustain(f64),
+    Vcf(VcfChange),
+    Fx(crate::command::FxChange),
+    Sympathetics(bool),
+    SympatheticDecay(f32),
+    SympatheticGain(f32),
+    Sympathetic(SympatheticChange),
 }
 
 #[derive(Clone, Copy)]
@@ -138,6 +138,11 @@ impl SympatheticBank {
         }
     }
 
+    #[contracts::debug_requires(harmony.len > 0, "weighted harmony has at least one component")]
+    #[contracts::debug_ensures(
+        ret.iter().all(|(_, weight)| *weight >= 0.0),
+        "target weights are non-negative"
+    )]
     fn weighted_targets(&self, harmony: SympatheticHarmony) -> Vec<(f64, f32)> {
         let total_weight: f32 = harmony
             .iter()
@@ -593,39 +598,37 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 let (event, milestone, pending_control) = tick_sequencer(
                     &mut phrases,
                     &mut cur_phrase,
-                    sr,
-                    &mut voices,
                     &mut jump_counters,
                     &mut pending_next_id,
                 );
 
                 if let Some(ctrl) = pending_control {
                     match ctrl {
-                        PendingControl::SetBpm(v) => {
+                        PendingControl::Bpm(v) => {
                             bpm = v;
                             for pp in phrases.iter_mut() {
                                 pp.rebuild(sr, bpm);
                             }
                         }
-                        PendingControl::SetSustain(v) => {
+                        PendingControl::Sustain(v) => {
                             sustain = v;
                         }
-                        PendingControl::SetVcf(change) => {
+                        PendingControl::Vcf(change) => {
                             if let Ok(setting) = crate::command::apply_vcf_change(vcf, change) {
                                 vcf.apply(setting);
                                 vcf_filters.apply(setting);
                             }
                         }
-                        PendingControl::SetFx(change) => {
+                        PendingControl::Fx(change) => {
                             if let Ok(setting) = crate::command::apply_fx_change(fx, change) {
                                 fx = setting;
                                 fx_processor.set_settings(setting);
                             }
                         }
-                        PendingControl::SetSympathetics(enabled) => {
+                        PendingControl::Sympathetics(enabled) => {
                             sympathetics_enabled = enabled;
                         }
-                        PendingControl::SetSympatheticDecay(decay) => {
+                        PendingControl::SympatheticDecay(decay) => {
                             sympathetics.apply_change(
                                 SympatheticChange {
                                     decay: Some(decay),
@@ -634,7 +637,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                                 &mut sympathetics_enabled,
                             );
                         }
-                        PendingControl::SetSympatheticGain(gain) => {
+                        PendingControl::SympatheticGain(gain) => {
                             sympathetics.apply_change(
                                 SympatheticChange {
                                     gain: Some(gain),
@@ -643,7 +646,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                                 &mut sympathetics_enabled,
                             );
                         }
-                        PendingControl::SetSympathetic(change) => {
+                        PendingControl::Sympathetic(change) => {
                             sympathetics.apply_change(change, &mut sympathetics_enabled);
                         }
                     }
@@ -877,10 +880,8 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
 }
 
 fn tick_sequencer(
-    phrases: &mut Vec<PlayingPhrase>,
+    phrases: &mut [PlayingPhrase],
     cur_phrase: &mut usize,
-    _sr: f64,
-    _voices: &mut Vec<Voice>,
     jump_counters: &mut std::collections::HashMap<usize, usize>,
     pending_next_id: &mut Option<usize>,
 ) -> (Option<SubdivEvent>, Milestone, Option<PendingControl>) {
@@ -934,14 +935,14 @@ fn tick_sequencer(
             }
             let pending = match ctrl {
                 ControlSpec::Stop => unreachable!(),
-                ControlSpec::SetBpm(v) => PendingControl::SetBpm(v),
-                ControlSpec::SetSustain(v) => PendingControl::SetSustain(v),
-                ControlSpec::SetVcf(v) => PendingControl::SetVcf(v),
-                ControlSpec::SetFx(v) => PendingControl::SetFx(v),
-                ControlSpec::SetSympathetics(v) => PendingControl::SetSympathetics(v),
-                ControlSpec::SetSympatheticDecay(v) => PendingControl::SetSympatheticDecay(v),
-                ControlSpec::SetSympatheticGain(v) => PendingControl::SetSympatheticGain(v),
-                ControlSpec::SetSympathetic(v) => PendingControl::SetSympathetic(v),
+                ControlSpec::SetBpm(v) => PendingControl::Bpm(v),
+                ControlSpec::SetSustain(v) => PendingControl::Sustain(v),
+                ControlSpec::SetVcf(v) => PendingControl::Vcf(v),
+                ControlSpec::SetFx(v) => PendingControl::Fx(v),
+                ControlSpec::SetSympathetics(v) => PendingControl::Sympathetics(v),
+                ControlSpec::SetSympatheticDecay(v) => PendingControl::SympatheticDecay(v),
+                ControlSpec::SetSympatheticGain(v) => PendingControl::SympatheticGain(v),
+                ControlSpec::SetSympathetic(v) => PendingControl::Sympathetic(v),
             };
             *cur_phrase += 1;
             if *cur_phrase >= phrases.len() {

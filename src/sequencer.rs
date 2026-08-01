@@ -118,11 +118,6 @@ impl Phrase {
     pub fn pitch_ratios_display(&self) -> String {
         self.bar.ratio_strs.join(" | ")
     }
-
-    #[allow(dead_code)]
-    pub fn is_jump(&self) -> bool {
-        self.jump.is_some()
-    }
 }
 
 fn empty_bar() -> Bar {
@@ -179,6 +174,7 @@ pub struct BarSpec {
     pub groups: Vec<u8>,
 }
 
+#[contracts::debug_requires(!specs.is_empty(), "build_phrase requires at least one bar spec")]
 pub fn build_phrase(
     phrase_id: usize,
     src: String,

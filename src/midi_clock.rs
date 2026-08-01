@@ -73,7 +73,7 @@ fn run_receiver(device: &str, tx: Sender<AudioCmd>) -> anyhow::Result<()> {
                 }
             }
             // MIDI stop / start / continue — ignore for now
-            0xFA | 0xFB | 0xFC => {}
+            0xFA..=0xFC => {}
             _ => {}
         }
     }

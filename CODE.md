@@ -47,11 +47,16 @@ SetBpm(f64)
 SetSustain(f64)
 SetVcf(VcfChange)
 SetFx(FxChange)
+SetSympathetics(bool)
+SetSympatheticDecay(f32)
+SetSympatheticGain(f32)
+SetSympathetic(SympatheticChange)
 ```
 
-VCF and FX control entries store the original relative command as a parsed
-change, not as a frozen absolute setting. That is what makes commands like
-`vcf bass cut=+2t` meaningful when replayed in a loop.
+VCF, FX, and full sympathetic control entries store the original relative
+command as a parsed change, not as a frozen absolute setting. That is what
+makes commands like `vcf bass cut +2t`, `delay mix +0.1`, or
+`sym decay +0.001t` meaningful when replayed in a loop.
 
 ## File Guide
 
@@ -72,7 +77,7 @@ Owns interactive state:
 
 - timeline entries
 - command input, cursor, history, help/jins overlays
-- current BPM, sustain, volume, VCF bank, and FX settings
+- current BPM, sustain, volume, tuneto pitch, VCF bank, and FX settings
 - session path
 - recording result receiver
 - MIDI clockout sender
@@ -101,8 +106,10 @@ Pure parser and value-change logic. It parses:
 - jumps, inserts, edits, deletes, moves, rotate
 - `bpm`, `s`/`sus`, `vol`
 - VCF/VCO commands
+- sympathetic string commands
 - reverb, delay, pingpong, and `fx off`
 - session commands
+- live globals commands such as `vol` and `tuneto`
 - jins registry commands
 - recording and playback commands
 
@@ -119,7 +126,8 @@ Tick(f64)
 
 `apply_vcf_change` applies a `VcfChange` against a `VcfBank` and returns a
 single `VcfSettings` for the target slot. `apply_fx_change` applies `FxChange`
-against `FxSettings`.
+against `FxSettings`. Sympathetic changes cover enable/disable, decay, drive,
+per-source partition settings, interval shifts, and weighted JI harmony splits.
 
 ### `src/sequencer.rs`
 
@@ -226,11 +234,17 @@ B|id|bpm
 S|id|sustain
 V|id|vcf command
 F|id|fx command
+Y|id|sym command
 ```
 
 Fields are escaped for `|`, backslash, and newline. Custom jins are written as
-plain `create` lines before the timeline. Live-only state such as volume is not
-serialized.
+plain `create` lines before the timeline. Live-only state such as volume and
+tuneto is not serialized in `.mq` files.
+
+Live globals are separate from sessions. By default they are written to
+`.globals.ml`, or to `MAQAM_GLOBALS_PATH` when that environment variable is set.
+They currently contain `vol` and `tuneto`, and are written immediately when
+those values change.
 
 ### `src/record.rs` And `src/record_old.rs`
 
@@ -283,9 +297,10 @@ for convenience. Legacy `vol` lines are accepted but ignored. Older numeric VCF
 records are still accepted.
 
 After loading, the app computes the sequence-start settings by walking leading
-control entries before the first musical phrase, then sends `Clear`,
-`SetBpm`, `SetSustain`, `SetVcfBank`, `SetFxSettings`, `SetVol`, and every
-loaded entry to audio.
+control entries before the first musical phrase, then sends `Clear`, `SetBpm`,
+`SetSustain`, `SetVcfBank`, `SetFxSettings`, `SetVol`, and every loaded entry
+to audio. Leading sympathetic controls are currently replayed as timeline
+entries rather than folded into the sequence-start settings.
 
 ## Real-Time Audio Notes
 
@@ -318,6 +333,17 @@ Run:
 cargo test
 ```
 
+## Contracts
+
+The codebase uses the `contracts` crate for Design by Contract annotations at
+internal boundaries. Prefer `#[contracts::debug_requires(...)]` and
+`#[contracts::debug_ensures(...)]` for assumptions that would otherwise be
+implicit, such as non-empty generated specs or bounded fixed-size storage.
+
+Do not use contracts for normal user-input validation. Parser and command
+errors should continue returning actionable `Result` messages that tell the
+user what to do.
+
 ## Dependencies
 
 | Crate | Purpose |
@@ -327,5 +353,6 @@ cargo test
 | `crossterm` | terminal input/raw mode |
 | `crossbeam-channel` | app-to-audio command channel |
 | `anyhow` | top-level error handling |
+| `contracts` | debug-build precondition/postcondition annotations |
 
 Rust edition is 2021. The toolchain is pinned by `rust-toolchain.toml`.

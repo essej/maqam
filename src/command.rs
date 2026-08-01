@@ -62,6 +62,14 @@ pub struct SympatheticHarmony {
 }
 
 impl SympatheticHarmony {
+    #[contracts::debug_requires(
+        self.len <= self.components.len(),
+        "harmony length stays within storage"
+    )]
+    #[contracts::debug_ensures(
+        self.len <= self.components.len(),
+        "harmony length stays within storage"
+    )]
     pub(crate) fn push(&mut self, component: SympatheticHarmonyComponent) -> Result<(), String> {
         if self.len >= self.components.len() {
             return Err("sym harmony can contain at most 8 intervals".into());
@@ -71,6 +79,10 @@ impl SympatheticHarmony {
         Ok(())
     }
 
+    #[contracts::debug_requires(
+        self.len <= self.components.len(),
+        "harmony length stays within storage"
+    )]
     pub fn iter(&self) -> impl Iterator<Item = SympatheticHarmonyComponent> + '_ {
         self.components[..self.len].iter().copied()
     }
@@ -595,7 +607,7 @@ pub fn language_reference() -> String {
         for param in meta.parameters {
             out.push_str("  - `");
             out.push_str(param.name);
-            out.push_str("`");
+            out.push('`');
             append_aliases(&mut out, param.aliases);
             out.push_str(": ");
             out.push_str(param.description);
@@ -1264,8 +1276,8 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
     // ── AUDITION: audition <phrase-spec> ─────────────────────────────────
     if al == "audition" {
         let rest = input
-            .splitn(2, char::is_whitespace)
-            .nth(1)
+            .split_once(char::is_whitespace)
+            .map(|(_, rest)| rest)
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or("usage: audition <Name> | audition <root> <Name> [, <root> <Name> ...]")?;
@@ -1320,8 +1332,8 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
     // ── SAVE / LOAD ───────────────────────────────────────────────────────
     if al == "save" {
         let path = input
-            .splitn(2, char::is_whitespace)
-            .nth(1)
+            .split_once(char::is_whitespace)
+            .map(|(_, path)| path)
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
@@ -1329,8 +1341,8 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
     }
     if al == "load" {
         let path = input
-            .splitn(2, char::is_whitespace)
-            .nth(1)
+            .split_once(char::is_whitespace)
+            .map(|(_, path)| path)
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .ok_or("usage: load <path>")?
@@ -1434,8 +1446,7 @@ fn parse_ratio(s: &str) -> Option<(u32, u32)> {
     let p = parts.next()?.parse::<u32>().ok()?;
     let q = parts
         .next()
-        .map(|q| q.parse::<u32>().ok())
-        .flatten()
+        .and_then(|q| q.parse::<u32>().ok())
         .unwrap_or(1);
     if q == 0 {
         return None;

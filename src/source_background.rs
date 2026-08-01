@@ -565,7 +565,7 @@ fn draw_phrase_band(buf: &mut [[u8; 3]], band: &PhraseBand, order: u32) -> Vec<P
     draw_region_underpaint(buf, &pts, band.color);
 
     for (i, seg) in pts.windows(2).enumerate() {
-        let energy = 0.25 + 0.75 * h01(hash((band.id as u32).wrapping_mul(911) ^ i as u32 * 17));
+        let energy = 0.25 + 0.75 * h01(hash((band.id as u32).wrapping_mul(911) ^ (i as u32 * 17)));
         let over = ((i / 2) + band.id) % 2 == 0;
         let accent = accent_for_token(&band.ratio_tokens, i);
         let color = if i % 7 == 0 { accent } else { band.color };

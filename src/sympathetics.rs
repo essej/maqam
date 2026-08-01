@@ -65,7 +65,7 @@ impl SympatheticStrings {
             let mut hz = frequency as f32;
             // Keep the sympathetic bank well above the main instrument's body:
             // its lowest course lives in the 320–640 Hz octave.
-            while hz > 0.0 && hz >= 320.0 {
+            while hz >= 320.0 {
                 hz *= 0.5;
             }
             while hz > 0.0 && hz < 320.0 {

@@ -3209,9 +3209,7 @@ fn metadata_command_completion(body: &str) -> Option<MetadataCompletion> {
     let meta = command::command_metadata(head)?;
     let trailing_space = body_trimmed.chars().last().is_some_and(char::is_whitespace);
 
-    if tokens.len() == 1 && !trailing_space {
-        tokens.push("");
-    } else if trailing_space {
+    if tokens.len() == 1 || trailing_space {
         tokens.push("");
     }
 
@@ -4767,7 +4765,7 @@ mod tests {
         let (tx, _rx) = bounded(16);
         let mut app = App::new(tx);
         let sent = llm_edit_prompt("make a d major turnaround");
-        let returned = vec!["d major 332".to_string(), "g major 332".to_string()];
+        let returned = ["d major 332".to_string(), "g major 332".to_string()];
 
         assert!(sent.contains("make the change with the apply_maqam_commands tool"));
         assert!(sent.contains("Never concatenate two commands without a separator"));

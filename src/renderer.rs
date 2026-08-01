@@ -108,9 +108,9 @@ impl RgbImage {
         }
         let i = (y as usize * self.w + x as usize) * 3;
         let a = alpha.clamp(0.0, 1.0);
-        for ch in 0..3 {
+        for (ch, over) in rgb.iter().enumerate() {
             let base = self.rgb[i + ch] as f32;
-            let over = rgb[ch] as f32;
+            let over = *over as f32;
             self.rgb[i + ch] = (base * (1.0 - a) + over * a).round().clamp(0.0, 255.0) as u8;
         }
     }

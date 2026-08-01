@@ -45,7 +45,7 @@ fn pitch_ratio(letter: char, accidental: i8) -> (u32, u32) {
         }
     }
     for (name, p, q) in PITCH_TABLE {
-        if name.chars().next() == Some(letter) && name.len() == 1 {
+        if name.starts_with(letter) && name.len() == 1 {
             return (*p, *q);
         }
     }
@@ -107,10 +107,13 @@ pub fn snap_to_oud_lattice(nominal_hz: f64) -> f64 {
 
 // ── Jins registry ─────────────────────────────────────────────────────────────
 
-static REGISTRY: OnceLock<RwLock<HashMap<String, Vec<(u32, u32)>>>> = OnceLock::new();
+type RatioList = Vec<(u32, u32)>;
+type JinsRegistry = HashMap<String, RatioList>;
 
-fn default_registry_map() -> HashMap<String, Vec<(u32, u32)>> {
-    let mut m: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+static REGISTRY: OnceLock<RwLock<JinsRegistry>> = OnceLock::new();
+
+fn default_registry_map() -> JinsRegistry {
+    let mut m = JinsRegistry::new();
     m.insert(
         "Nahawand".into(),
         vec![(1, 1), (9, 8), (32, 27), (4, 3), (3, 2)],

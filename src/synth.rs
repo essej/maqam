@@ -41,8 +41,8 @@ pub fn zigzag_walk(n_groups: usize, peak: usize) -> Vec<usize> {
         return vec![0];
     }
     let mut w = vec![0usize; n_groups + 1];
-    for i in 1..n_groups {
-        w[i] = if i % 2 == 1 { peak } else { (peak / 2).max(1) };
+    for (i, degree) in w.iter_mut().enumerate().take(n_groups).skip(1) {
+        *degree = if i % 2 == 1 { peak } else { (peak / 2).max(1) };
     }
     if n_groups == 1 {
         w[1] = peak;
@@ -255,7 +255,7 @@ impl Voice {
             1.0
         };
 
-        let gain: f32 = self.gain_override.unwrap_or_else(|| match self.kind {
+        let gain: f32 = self.gain_override.unwrap_or(match self.kind {
             VoiceKind::FloorTom => 0.65,
             VoiceKind::Snare => 0.28,
             VoiceKind::Crash => 0.42,
@@ -381,11 +381,6 @@ pub fn spawn_voices(
 fn panned(mut v: Voice) -> Voice {
     v.pan = (rand_f32_01() - 0.5) * 1.8;
     v
-}
-
-#[allow(dead_code)]
-pub fn spawn_arp_voice(hz: f64, sustain: f64, voices: &mut Vec<Voice>) {
-    voices.push(Voice::melody_gain(hz, sustain, 0.12));
 }
 
 pub fn spawn_phrase_start(hz: f64, sustain: f64, voices: &mut Vec<Voice>) {

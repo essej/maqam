@@ -17,6 +17,9 @@ const SR: f64 = 44100.0;
 const RENDER_COOP_INTERVAL_SAMPLES: usize = 4096;
 const ASS_MONO_FONT: &str = "DejaVu Sans Mono";
 
+type HighlightRangeKey = (u8, i32, i32, i32, i32, &'static str);
+type JumpCounterSnapshot = HashMap<usize, (usize, usize)>;
+
 fn temp_path(name: &str) -> String {
     let mut p = std::env::temp_dir();
     p.push(name);
@@ -204,8 +207,7 @@ fn build_carpet_tick_highlights(
     // Giving every visit its own drawbox creates a deeply chained ffmpeg graph
     // which can crash with SIGBUS while being configured on macOS.  Keep one
     // drawbox per visual cell and combine all of its active time ranges.
-    let mut ranges: HashMap<(u8, i32, i32, i32, i32, &'static str), Vec<(f64, f64)>> =
-        HashMap::new();
+    let mut ranges: HashMap<HighlightRangeKey, Vec<(f64, f64)>> = HashMap::new();
     let total_secs = full_seq
         .iter()
         .map(|entry| bar_samples_for(entry.phrase_idx, entry.bpm))
@@ -394,7 +396,7 @@ fn expand_one_cycle(
     start_sustain: f64,
     start_vcf: VcfBank,
     start_fx: FxSettings,
-) -> (Vec<RenderOccurrence>, Vec<HashMap<usize, (usize, usize)>>) {
+) -> (Vec<RenderOccurrence>, Vec<JumpCounterSnapshot>) {
     let mut out = Vec::new();
     let mut snapshots = Vec::new();
     let mut cur = 0usize;
@@ -604,7 +606,7 @@ pub fn record_cycle(
                     let is_last_subdiv = curr + 1 >= total_subdivs;
                     let next_is_different = full_seq
                         .get(seq_pos + 1)
-                        .map_or(false, |next| next.phrase_idx != phrase_idx);
+                        .is_some_and(|next| next.phrase_idx != phrase_idx);
                     let milestone = if is_first && curr == 0 {
                         Milestone::PhraseStart
                     } else if is_last_play && is_last_subdiv {

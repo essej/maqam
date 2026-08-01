@@ -178,19 +178,11 @@ impl VcfBank {
         match setting.target {
             VcfTarget::All => {
                 self.all = setting;
-                if setting.enabled {
-                    self.mic.enabled = false;
-                    self.bass.enabled = false;
-                    self.kanun.enabled = false;
-                    self.kick.enabled = false;
-                    self.tanbura.enabled = false;
-                } else {
-                    self.mic.enabled = false;
-                    self.bass.enabled = false;
-                    self.kanun.enabled = false;
-                    self.kick.enabled = false;
-                    self.tanbura.enabled = false;
-                }
+                self.mic.enabled = false;
+                self.bass.enabled = false;
+                self.kanun.enabled = false;
+                self.kick.enabled = false;
+                self.tanbura.enabled = false;
             }
             VcfTarget::Mic => {
                 self.all.enabled = false;
