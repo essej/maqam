@@ -17,6 +17,7 @@ use crate::sympathetics::SympatheticStrings;
 use crate::synth::{
     evolve_bar, spawn_phrase_start, spawn_sub_bass, spawn_voices, Milestone, Voice, VoiceKind,
 };
+
 use crate::vcf::{MoogLadder, VcfBank, VcfSettings, VcfTarget};
 
 // ── Playback state ────────────────────────────────────────────────────────────
@@ -443,6 +444,8 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
     let mut nam_input = NamInput::Stereo;
     let mut latency_test: Option<crossbeam_channel::Sender<Result<f64, String>>> = None;
     let mut latency_ms_ema: Option<f64> = None;
+    let mut meter_peaks = [0.0f32; 3];
+    let mut last_metrics_publish = std::time::Instant::now();
 
     let stream = device.build_output_stream(
         &cfg.into(),
@@ -496,9 +499,29 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     AudioCmd::SetNamModel(model) => {
                         nam_model = model;
                         nam_enabled = nam_model.is_some();
+                        crate::NAM_MODEL_ACTIVE
+                            .store(nam_enabled, std::sync::atomic::Ordering::Relaxed);
+                        crate::NAM_STATUS.store(
+                            if nam_enabled { 1 } else { 0 },
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
                     }
                     AudioCmd::SetNamEnabled(enabled) => {
                         nam_enabled = enabled;
+                        crate::NAM_MODEL_ACTIVE.store(
+                            enabled && nam_model.is_some(),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        crate::NAM_STATUS.store(
+                            if nam_model.is_none() {
+                                0
+                            } else if enabled {
+                                1
+                            } else {
+                                5
+                            },
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
                     }
                     AudioCmd::SetNamGain(gain) => {
                         nam_gain = gain.clamp(0.0, 8.0);
@@ -739,6 +762,8 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 let input = input_packet
                     .map(|(_, samples)| samples)
                     .unwrap_or([0.0, 0.0]);
+                meter_peaks[0] = meter_peaks[0].max(input[0].abs());
+                meter_peaks[1] = meter_peaks[1].max(input[1].abs());
                 if let Some((captured_at, _)) = input_packet {
                     let measured_ms = playback_at
                         .duration_since(&captured_at)
@@ -747,11 +772,6 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         let smoothed = latency_ms_ema
                             .map_or(measured_ms, |previous| previous * 0.9 + measured_ms * 0.1);
                         latency_ms_ema = Some(smoothed);
-                        let latency_us = (smoothed * 1000.0).round().max(1.0) as u64;
-                        crate::AUDIO_LATENCY_LEFT_US
-                            .store(latency_us, std::sync::atomic::Ordering::Relaxed);
-                        crate::AUDIO_LATENCY_RIGHT_US
-                            .store(latency_us, std::sync::atomic::Ordering::Relaxed);
                     }
                     if let Some(result_tx) = latency_test.take() {
                         let result = measured_ms.ok_or_else(|| {
@@ -770,12 +790,37 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         live_input = model.process_sample(live_input * nam_gain);
                     }
                 }
+                meter_peaks[2] = meter_peaks[2].max(live_input.abs());
+                if last_metrics_publish.elapsed() >= std::time::Duration::from_secs(10) {
+                    if let Some(latency_ms) = latency_ms_ema {
+                        let latency_us = (latency_ms * 1000.0).round().max(1.0) as u64;
+                        crate::AUDIO_LATENCY_LEFT_US
+                            .store(latency_us, std::sync::atomic::Ordering::Relaxed);
+                        crate::AUDIO_LATENCY_RIGHT_US
+                            .store(latency_us, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    crate::INPUT_LEFT_LEVEL.store(
+                        (meter_peaks[0].min(4.0) * 1_000_000.0) as u32,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    crate::INPUT_RIGHT_LEVEL.store(
+                        (meter_peaks[1].min(4.0) * 1_000_000.0) as u32,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    crate::NAM_OUTPUT_LEVEL.store(
+                        (meter_peaks[2].min(4.0) * 1_000_000.0) as u32,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    meter_peaks = [0.0; 3];
+                    last_metrics_publish = std::time::Instant::now();
+                }
                 if voices.is_empty()
                     && !fx.active()
                     && !sympathetics_enabled
                     && !sympathetics.has_energy()
                     && !vcf.all.enabled
                     && !vcf.mic.enabled
+                    && live_input.abs() < 1.0e-7
                 {
                     vcf_filters.reset();
                     for sample in frame.iter_mut() {
@@ -869,6 +914,9 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 } else if vcf.mic.enabled {
                     mic_left += live_input;
                     mic_right += live_input;
+                } else {
+                    dry_left += live_input;
+                    dry_right += live_input;
                 }
                 if vcf.all.enabled {
                     dry_left += sympathetic;

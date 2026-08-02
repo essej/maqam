@@ -34,6 +34,13 @@ pub static AUDIO_LATENCY_LEFT_US: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 pub static AUDIO_LATENCY_RIGHT_US: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+pub static INPUT_LEFT_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static INPUT_RIGHT_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static NAM_OUTPUT_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static NAM_MODEL_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// 0 none, 1 active, 2 login required/in progress, 3 downloading, 4 error, 5 bypassed.
+pub static NAM_STATUS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Progress atomics: written by render thread, read by TUI.
 pub static REC_SAMPLES_DONE: std::sync::atomic::AtomicUsize =

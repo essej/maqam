@@ -14,6 +14,10 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
+// TONE3000 publishable OAuth client ID for maqam-live. Publishable keys are
+// intentionally safe to ship in desktop/client applications; never embed the secret key.
+const TONE3000_PUBLISHABLE_CLIENT_ID: &str = "t3k_pub__1tkc-W6fWSyBUgGJdHj-bqpnPtFesDA";
+
 #[derive(Clone, Debug)]
 pub struct NamDownloadProgress {
     pub name: String,
@@ -470,7 +474,10 @@ impl App {
                     self.start_tone3000_download(tone_id, name);
                 }
             }
-            Err(err) => self.message = Some(format!("✗ TONE3000 login failed: {err}")),
+            Err(err) => {
+                crate::NAM_STATUS.store(4, std::sync::atomic::Ordering::Relaxed);
+                self.message = Some(format!("✗ TONE3000 login failed: {err}"));
+            }
         }
     }
 
@@ -509,6 +516,7 @@ impl App {
                     Err(err) => {
                         finished = true;
                         self.nam_download_progress = None;
+                        crate::NAM_STATUS.store(4, std::sync::atomic::Ordering::Relaxed);
                         self.message = Some(format!("✗ {err}"));
                     }
                 }
@@ -1177,7 +1185,9 @@ impl App {
                         Some(detail)
                             if self.pending_nam_slot.is_some()
                                 || self.nam_download_progress.is_some()
-                                || detail.starts_with("TONE3000 authorization") =>
+                                || detail.starts_with("TONE3000 authorization")
+                                || detail.starts_with("TONE3000 login")
+                                || detail.contains("TONE3000_CLIENT_ID") =>
                         {
                             detail
                         }
@@ -1842,13 +1852,13 @@ impl App {
         let token = match tone3000_access_token() {
             Ok(token) => token,
             Err(_) => {
+                crate::NAM_STATUS.store(2, std::sync::atomic::Ordering::Relaxed);
                 self.pending_tone3000_download = Some((tone_id, name));
-                self.message = Some(format!(
-                    "TONE3000 login is needed to fetch tone {tone_id}; run `nam login`"
-                ));
+                self.start_tone3000_login();
                 return;
             }
         };
+        crate::NAM_STATUS.store(3, std::sync::atomic::Ordering::Relaxed);
         let cache_dir = nam_cache_dir();
         let (tx, rx) = crossbeam_channel::unbounded();
         self.nam_download_rx = Some(rx);
@@ -1875,11 +1885,9 @@ impl App {
             return;
         }
         let client_id = std::env::var("TONE3000_CLIENT_ID")
-            .or_else(|_| std::env::var("TONE3000_PUBLISHABLE_KEY"));
-        let Ok(client_id) = client_id else {
-            self.message = Some("✗ set TONE3000_CLIENT_ID to the publishable client ID from TONE3000 Settings → API Keys".into());
-            return;
-        };
+            .or_else(|_| std::env::var("TONE3000_PUBLISHABLE_KEY"))
+            .or_else(|_| load_tone3000_auth().map(|auth| auth.client_id))
+            .unwrap_or_else(|_| TONE3000_PUBLISHABLE_CLIENT_ID.to_string());
         let (tx, rx) = crossbeam_channel::bounded(1);
         self.tone3000_auth_rx = Some(rx);
         self.message =
@@ -4421,7 +4429,7 @@ fn random_base64url(bytes: usize) -> Result<String, String> {
 }
 
 fn tone3000_browser_login(client_id: &str) -> Result<Tone3000Auth, String> {
-    let listener = TcpListener::bind("127.0.0.1:0")
+    let listener = TcpListener::bind(("localhost", 0))
         .map_err(|e| format!("could not start local OAuth callback: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let redirect_uri = format!("http://localhost:{port}/callback");

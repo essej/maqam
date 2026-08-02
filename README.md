@@ -285,13 +285,14 @@ they can be moved, rotated, inserted, edited, saved, and scheduled. For example,
 `nam pin URL as name` also replaces the score's ambiguous
 `nam name` line with the exact downloadable source. Other machines then fetch
 the same capture into their local cache when loading that score.
-`nam tone3000 ID as name` pins a canonical catalog identity instead. Set the
-publishable client ID from TONE3000 Settings → API Keys as `TONE3000_CLIENT_ID`,
-then run `nam login`. Maqam opens the system browser and waits for the OAuth
-callback on localhost in a background thread, so playback and the TUI continue.
+`nam tone3000 ID as name` pins a canonical catalog identity instead. On first
+use, Maqam automatically opens TONE3000 authorization in the system browser and
+waits for the OAuth callback on localhost in a background thread, so playback
+and the TUI continue. No API-key setup or login command is required.
 The credential is kept in the ignored, owner-only `.tone3000-auth.json` file and
 refreshed automatically; `nam logout` removes it. `TONE3000_ACCESS_TOKEN` remains
-available for headless use. An authenticated maqam-live resolves and downloads its A2 model via
+available for headless use, and `TONE3000_CLIENT_ID` can override the bundled
+publishable client ID during development. An authenticated maqam-live resolves and downloads its A2 model via
 the authenticated TONE3000 API.
 The input chain is selected input -> NAM -> `vcf mic` or `vcf all`. `stereo`
 mixes both hardware channels equally before the mono NAM model. Referenced

@@ -469,16 +469,24 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Some(filename) => format!(" maqam-live {filename} {} ", app.globals_filename()),
         None => format!(" maqam-live {} ", app.globals_filename()),
     };
+    let meter = format!(" {} ", latency_status());
+    let title_width = area.width.saturating_sub(2) as usize;
+    let padding = title_width.saturating_sub(title.chars().count() + meter.chars().count());
+    let banner = Line::from(vec![
+        Span::styled(
+            title,
+            Style::default()
+                .fg(ACCENT)
+                .bg(BG)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ".repeat(padding), Style::default().bg(BG)),
+        Span::styled(meter, Style::default().fg(DIM).bg(BG)),
+    ]);
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(Span::styled(
-                title,
-                Style::default()
-                    .fg(ACCENT)
-                    .bg(BG)
-                    .add_modifier(Modifier::BOLD),
-            ))
+            .title(banner)
             .border_style(Style::default().fg(BORDER).bg(BG))
             .style(Style::default().fg(INACTIVE_GRAY).bg(BG)),
     );
@@ -521,7 +529,6 @@ fn draw_input(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let latency = latency_status();
     if let Some(msg) = &app.message {
         let col = if msg.starts_with('✗') { ERR } else { DIM };
         let paragraph = Paragraph::new(msg.as_str())
@@ -532,7 +539,7 @@ fn draw_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(Span::styled(
-                        format!(" response PgUp/PgDn  {latency} "),
+                        " response PgUp/PgDn ",
                         Style::default().fg(DIM).bg(BG),
                     ))
                     .border_style(Style::default().fg(BORDER).bg(BG)),
@@ -565,15 +572,14 @@ fn draw_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let fx_status = format_fx_status(app.fx);
     let text = Line::from(vec![Span::styled(
         format!(
-            "  {}BPM:{} sus:{:.1}s vcf:{} fx:{} vol:{:.2} phrases:{} {}  [?] help  [z] sound  [z id] jump",
+            "  {}BPM:{} sus:{:.1}s vcf:{} fx:{} vol:{:.2} phrases:{}  [?] help  [z] sound  [z id] jump",
             if app.paused { "⏸ PAUSED  " } else { "" },
             app.bpm,
             app.sustain,
             vcf_status,
             fx_status,
             app.vol,
-            app.phrases.len(),
-            latency
+            app.phrases.len()
         ),
         Style::default().fg(DIM).bg(BG),
     )]);
@@ -591,7 +597,33 @@ fn latency_status() -> String {
             format!("{:.1}ms", us as f64 / 1000.0)
         }
     };
-    format!("lat L:{} R:{}", value(left), value(right))
+    let level = |raw: u32| {
+        if raw == 0 {
+            "-∞".to_string()
+        } else {
+            format!("{:.0}", 20.0 * (raw as f64 / 1_000_000.0).log10())
+        }
+    };
+    let input_left = crate::INPUT_LEFT_LEVEL.load(Relaxed);
+    let input_right = crate::INPUT_RIGHT_LEVEL.load(Relaxed);
+    let nam_output = crate::NAM_OUTPUT_LEVEL.load(Relaxed);
+    let nam = match crate::NAM_STATUS.load(Relaxed) {
+        1 => "on",
+        2 => "login",
+        3 => "downloading",
+        4 => "error",
+        5 => "bypass",
+        _ => "none",
+    };
+    format!(
+        "lat L:{} R:{}  in L:{} R:{}dB post:{}dB NAM:{}",
+        value(left),
+        value(right),
+        level(input_left),
+        level(input_right),
+        level(nam_output),
+        nam
+    )
 }
 
 fn format_vcf_status(vcf: crate::vcf::VcfSettings) -> String {
