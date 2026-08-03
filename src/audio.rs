@@ -820,7 +820,6 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     && !sympathetics.has_energy()
                     && !vcf.all.enabled
                     && !vcf.mic.enabled
-                    && live_input.abs() < 1.0e-7
                 {
                     vcf_filters.reset();
                     for sample in frame.iter_mut() {
@@ -829,6 +828,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     continue;
                 }
 
+                let nam_active = nam_enabled && nam_model.is_some();
                 let (mut dry_left, mut dry_right) = (0f32, 0f32);
                 let (mut mic_left, mut mic_right) = (0f32, 0f32);
                 let (mut bass_left, mut bass_right) = (0f32, 0f32);
@@ -909,14 +909,13 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     sympathetics.process(false, 0.0, 0.0, 0.0, 0.0)
                 };
                 if vcf.all.enabled {
-                    dry_left += live_input;
-                    dry_right += live_input;
+                    if nam_active {
+                        dry_left += live_input;
+                        dry_right += live_input;
+                    }
                 } else if vcf.mic.enabled {
                     mic_left += live_input;
                     mic_right += live_input;
-                } else {
-                    dry_left += live_input;
-                    dry_right += live_input;
                 }
                 if vcf.all.enabled {
                     dry_left += sympathetic;
