@@ -7050,7 +7050,7 @@ mod tests {
     fn bundled_v3_sessions_load() {
         let _guard = session_test_lock();
 
-        for name in ["magiccarpet.mq", "growl.mq"] {
+        for name in ["default.mq", "magiccarpet.mq", "growl.mq"] {
             let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(name);
             let source = fs::read_to_string(&path).unwrap();
             assert!(source.starts_with("MAQAM_SESSION_V3\n"), "{name} is not V3");

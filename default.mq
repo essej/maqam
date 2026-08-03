@@ -10,6 +10,7 @@ V|31|vcf bass cut +12t res +0.3t drive 1.24 wave saw
 V|36|vcf mic cut 1200 res 0.6 drive 2
 V|29|vcf kanun cut +12t res +0.2t drive 1.24 wave saw
 V|37|vcf cut 1000 res 0.9 drive 1
+F|39|flanger rate 0.22 depth 0.65 delay 2.5 feedback 0.25 mix 0.18
 B|4|180
 P|1|1|d bayati 4444
 J|2|4|3
