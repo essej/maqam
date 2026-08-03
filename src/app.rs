@@ -5447,11 +5447,74 @@ fn tune_to_src(pitch: crate::tuning::Pitch) -> String {
 }
 
 fn fx_change_src(change: command::FxChange) -> String {
-    if change.reverb_enabled == Some(false) && change.delay_enabled == Some(false) {
+    if change.flanger_enabled == Some(false)
+        && change.chorus_enabled == Some(false)
+        && change.reverb_enabled == Some(false)
+        && change.delay_enabled == Some(false)
+    {
         return "fx off".to_string();
     }
     let mut parts = Vec::new();
-    if change.reverb_enabled.is_some()
+    if change.flanger_enabled.is_some()
+        || change.flanger_rate_hz.is_some()
+        || change.flanger_depth.is_some()
+        || change.flanger_delay_ms.is_some()
+        || change.flanger_feedback.is_some()
+        || change.flanger_mix.is_some()
+    {
+        parts.push("flanger".to_string());
+        if change.flanger_enabled == Some(false) {
+            parts.push("off".to_string());
+            return parts.join(" ");
+        }
+        if let Some(rate) = change.flanger_rate_hz {
+            parts.push("rate".to_string());
+            parts.push(value_change_src(rate));
+        }
+        if let Some(depth) = change.flanger_depth {
+            parts.push("depth".to_string());
+            parts.push(value_change_src(depth));
+        }
+        if let Some(delay) = change.flanger_delay_ms {
+            parts.push("delay".to_string());
+            parts.push(value_change_src(delay));
+        }
+        if let Some(feedback) = change.flanger_feedback {
+            parts.push("feedback".to_string());
+            parts.push(value_change_src(feedback));
+        }
+        if let Some(mix) = change.flanger_mix {
+            parts.push("mix".to_string());
+            parts.push(value_change_src(mix));
+        }
+    } else if change.chorus_enabled.is_some()
+        || change.chorus_rate_hz.is_some()
+        || change.chorus_depth.is_some()
+        || change.chorus_delay_ms.is_some()
+        || change.chorus_mix.is_some()
+    {
+        parts.push("chorus".to_string());
+        if change.chorus_enabled == Some(false) {
+            parts.push("off".to_string());
+            return parts.join(" ");
+        }
+        if let Some(rate) = change.chorus_rate_hz {
+            parts.push("rate".to_string());
+            parts.push(value_change_src(rate));
+        }
+        if let Some(depth) = change.chorus_depth {
+            parts.push("depth".to_string());
+            parts.push(value_change_src(depth));
+        }
+        if let Some(delay) = change.chorus_delay_ms {
+            parts.push("delay".to_string());
+            parts.push(value_change_src(delay));
+        }
+        if let Some(mix) = change.chorus_mix {
+            parts.push("mix".to_string());
+            parts.push(value_change_src(mix));
+        }
+    } else if change.reverb_enabled.is_some()
         || change.reverb_mix.is_some()
         || change.reverb_decay.is_some()
     {
@@ -5491,6 +5554,26 @@ fn fx_change_src(change: command::FxChange) -> String {
 }
 
 fn describe_fx(fx: FxSettings) -> String {
+    let flanger = if fx.flanger_enabled {
+        format!(
+            "flanger {:.2}Hz/{:.2}/{:.1}ms/{:.2}/{:.2}",
+            fx.flanger_rate_hz,
+            fx.flanger_depth,
+            fx.flanger_delay_ms,
+            fx.flanger_feedback,
+            fx.flanger_mix
+        )
+    } else {
+        "flanger off".to_string()
+    };
+    let chorus = if fx.chorus_enabled {
+        format!(
+            "chorus {:.2}Hz/{:.2}/{:.1}ms/{:.2}",
+            fx.chorus_rate_hz, fx.chorus_depth, fx.chorus_delay_ms, fx.chorus_mix
+        )
+    } else {
+        "chorus off".to_string()
+    };
     let rev = if fx.reverb_enabled {
         format!("rev {:.2}/{:.2}", fx.reverb_mix, fx.reverb_decay)
     } else {
@@ -5504,7 +5587,7 @@ fn describe_fx(fx: FxSettings) -> String {
     } else {
         "delay off".to_string()
     };
-    format!("{rev} {delay}")
+    format!("{flanger} {chorus} {rev} {delay}")
 }
 
 fn describe_vcf(v: VcfSettings) -> String {
@@ -5548,7 +5631,7 @@ fn is_plain_fx_control_line(line: &str) -> bool {
     let first = line.split_whitespace().next().unwrap_or("");
     matches!(
         first.to_ascii_lowercase().as_str(),
-        "fx" | "reverb" | "rev" | "delay" | "pingpong"
+        "fx" | "flanger" | "flange" | "chorus" | "choir" | "reverb" | "rev" | "delay" | "pingpong"
     )
 }
 
@@ -6299,7 +6382,7 @@ mod tests {
     #[test]
     fn fx_commands_use_vcf_style_parameter_rules() {
         let _guard = session_test_lock();
-        let (tx, _rx) = bounded(16);
+        let (tx, _rx) = bounded(64);
         let mut app = App::new(tx);
 
         app.handle_command("reverb mix=0.25 decay=0.7");
@@ -6313,6 +6396,25 @@ mod tests {
         assert_eq!(app.fx.delay_feedback, 0.45);
         assert_eq!(app.fx.delay_mix, 0.2);
 
+        app.handle_command("flanger rate=0.18 depth=0.8 delay=2.5 feedback=0.55 mix=0.35");
+        assert!(app.fx.flanger_enabled);
+        assert_eq!(app.fx.flanger_rate_hz, 0.18);
+        assert_eq!(app.fx.flanger_depth, 0.8);
+        assert_eq!(app.fx.flanger_delay_ms, 2.5);
+        assert_eq!(app.fx.flanger_feedback, 0.55);
+        assert_eq!(app.fx.flanger_mix, 0.35);
+
+        app.handle_command("chorus rate=0.7 depth=0.55 delay=18 mix=0.32");
+        assert!(app.fx.chorus_enabled);
+        assert_eq!(app.fx.chorus_rate_hz, 0.7);
+        assert_eq!(app.fx.chorus_depth, 0.55);
+        assert_eq!(app.fx.chorus_delay_ms, 18.0);
+        assert_eq!(app.fx.chorus_mix, 0.32);
+
+        app.handle_command("flange feedback=-0.1t");
+        assert_eq!(app.fx.flanger_feedback_step_per_tick, -0.1);
+        assert_eq!(app.phrases.last().unwrap().src, "flanger feedback -0.1t");
+
         app.handle_command("delay mix=+0.1");
         assert_eq!(app.fx.delay_mix, 0.3);
         assert_eq!(app.phrases.last().unwrap().src, "delay mix +0.1");
@@ -6322,6 +6424,8 @@ mod tests {
         assert_eq!(app.phrases.last().unwrap().src, "delay feedback +0.01t");
 
         app.handle_command("fx off");
+        assert!(!app.fx.flanger_enabled);
+        assert!(!app.fx.chorus_enabled);
         assert!(!app.fx.reverb_enabled);
         assert!(!app.fx.delay_enabled);
     }

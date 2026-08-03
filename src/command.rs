@@ -25,6 +25,17 @@ pub struct VcfChange {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FxChange {
+    pub flanger_enabled: Option<bool>,
+    pub flanger_rate_hz: Option<ValueChange>,
+    pub flanger_depth: Option<ValueChange>,
+    pub flanger_delay_ms: Option<ValueChange>,
+    pub flanger_feedback: Option<ValueChange>,
+    pub flanger_mix: Option<ValueChange>,
+    pub chorus_enabled: Option<bool>,
+    pub chorus_rate_hz: Option<ValueChange>,
+    pub chorus_depth: Option<ValueChange>,
+    pub chorus_delay_ms: Option<ValueChange>,
+    pub chorus_mix: Option<ValueChange>,
     pub reverb_enabled: Option<bool>,
     pub reverb_mix: Option<ValueChange>,
     pub reverb_decay: Option<ValueChange>,
@@ -654,6 +665,16 @@ pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
             "instrument targets default wave to their own source",
             "vcf all ignores wave and filters the final outgoing mix",
         ],
+    },
+    LanguagePatternMetadata {
+        syntax: "flanger on/off | flanger rate <0.01..8> depth <0..1> delay <0.1..10> feedback <-0.95..0.95> mix <0..1>",
+        description: "turn the post-amp flanger on or off and edit modulation parameters",
+        notes: &["named parameters may be combined on one line"],
+    },
+    LanguagePatternMetadata {
+        syntax: "chorus on/off | chorus rate <0.01..8> depth <0..1> delay <5..35> mix <0..1>",
+        description: "turn the post-amp chorus on or off and edit modulation parameters",
+        notes: &["named parameters may be combined on one line"],
     },
     LanguagePatternMetadata {
         syntax: "reverb on/off | reverb mix <0..1> decay <0..0.98>",
@@ -1358,7 +1379,11 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
     }
 
     // ── FX ───────────────────────────────────────────────────────────────
-    if matches!(al.as_str(), "fx" | "reverb" | "rev" | "delay" | "pingpong") && digits.is_empty() {
+    if matches!(
+        al.as_str(),
+        "fx" | "flanger" | "flange" | "chorus" | "choir" | "reverb" | "rev" | "delay" | "pingpong"
+    ) && digits.is_empty()
+    {
         return Ok(Cmd::SetFx(parse_fx_change(input)?));
     }
 
@@ -2182,7 +2207,7 @@ pub fn apply_vcf_change(current: VcfBank, change: VcfChange) -> Result<VcfSettin
 }
 
 fn parse_fx_change(input: &str) -> Result<FxChange, String> {
-    let usage = "usage: reverb mix=<0..1> decay=<0..0.98> | delay time=<secs> feedback=<0..0.95> mix=<0..1> | pingpong ... | reverb off | delay off | fx off";
+    let usage = "usage: flanger rate=<hz> depth=<0..1> delay=<ms> feedback=<-0.95..0.95> mix=<0..1> | chorus rate=<hz> depth=<0..1> delay=<ms> mix=<0..1> | reverb mix=<0..1> decay=<0..0.98> | delay time=<secs> feedback=<0..0.95> mix=<0..1> | fx off";
     let mut toks = input.split_whitespace();
     let head = toks.next().unwrap_or("").to_ascii_lowercase();
     let rest: Vec<&str> = toks.collect();
@@ -2190,6 +2215,8 @@ fn parse_fx_change(input: &str) -> Result<FxChange, String> {
 
     if head == "fx" {
         if rest.len() == 1 && rest[0].eq_ignore_ascii_case("off") {
+            out.flanger_enabled = Some(false);
+            out.chorus_enabled = Some(false);
             out.reverb_enabled = Some(false);
             out.delay_enabled = Some(false);
             return Ok(out);
@@ -2197,13 +2224,19 @@ fn parse_fx_change(input: &str) -> Result<FxChange, String> {
         return Err(usage.into());
     }
 
+    let is_flanger = matches!(head.as_str(), "flanger" | "flange");
+    let is_chorus = matches!(head.as_str(), "chorus" | "choir");
     let is_reverb = matches!(head.as_str(), "reverb" | "rev");
     let is_delay = matches!(head.as_str(), "delay" | "pingpong");
-    if !is_reverb && !is_delay {
+    if !is_flanger && !is_chorus && !is_reverb && !is_delay {
         return Err(usage.into());
     }
     if rest.len() == 1 && rest[0].eq_ignore_ascii_case("off") {
-        if is_reverb {
+        if is_flanger {
+            out.flanger_enabled = Some(false);
+        } else if is_chorus {
+            out.chorus_enabled = Some(false);
+        } else if is_reverb {
             out.reverb_enabled = Some(false);
         } else {
             out.delay_enabled = Some(false);
@@ -2211,7 +2244,11 @@ fn parse_fx_change(input: &str) -> Result<FxChange, String> {
         return Ok(out);
     }
     if rest.is_empty() || (rest.len() == 1 && rest[0].eq_ignore_ascii_case("on")) {
-        if is_reverb {
+        if is_flanger {
+            out.flanger_enabled = Some(true);
+        } else if is_chorus {
+            out.chorus_enabled = Some(true);
+        } else if is_reverb {
             out.reverb_enabled = Some(true);
         } else {
             out.delay_enabled = Some(true);
@@ -2219,7 +2256,11 @@ fn parse_fx_change(input: &str) -> Result<FxChange, String> {
         return Ok(out);
     }
 
-    if is_reverb {
+    if is_flanger {
+        out.flanger_enabled = Some(true);
+    } else if is_chorus {
+        out.chorus_enabled = Some(true);
+    } else if is_reverb {
         out.reverb_enabled = Some(true);
     } else {
         out.delay_enabled = Some(true);
@@ -2238,6 +2279,15 @@ fn parse_fx_change(input: &str) -> Result<FxChange, String> {
         };
         let change = ValueChange::parse(value, usage)?;
         match name.as_str() {
+            "rate" | "hz" | "speed" if is_flanger => out.flanger_rate_hz = Some(change),
+            "depth" | "width" if is_flanger => out.flanger_depth = Some(change),
+            "delay" | "time" | "ms" if is_flanger => out.flanger_delay_ms = Some(change),
+            "feedback" | "fb" | "regen" if is_flanger => out.flanger_feedback = Some(change),
+            "mix" if is_flanger => out.flanger_mix = Some(change),
+            "rate" | "hz" | "speed" if is_chorus => out.chorus_rate_hz = Some(change),
+            "depth" | "width" if is_chorus => out.chorus_depth = Some(change),
+            "delay" | "time" | "ms" if is_chorus => out.chorus_delay_ms = Some(change),
+            "mix" if is_chorus => out.chorus_mix = Some(change),
             "mix" if is_reverb => out.reverb_mix = Some(change),
             "decay" | "room" | "feedback" if is_reverb => out.reverb_decay = Some(change),
             "time" | "t" | "secs" | "seconds" if is_delay => out.delay_time_secs = Some(change),
@@ -2252,12 +2302,63 @@ fn parse_fx_change(input: &str) -> Result<FxChange, String> {
 
 pub fn apply_fx_change(current: FxSettings, change: FxChange) -> Result<FxSettings, String> {
     let mut next = current;
+    if let Some(enabled) = change.flanger_enabled {
+        next.flanger_enabled = enabled;
+    }
+    if let Some(enabled) = change.chorus_enabled {
+        next.chorus_enabled = enabled;
+    }
     if let Some(enabled) = change.reverb_enabled {
         next.reverb_enabled = enabled;
     }
     if let Some(enabled) = change.delay_enabled {
         next.delay_enabled = enabled;
     }
+    apply_fx_value(
+        &mut next.flanger_rate_hz,
+        &mut next.flanger_rate_step_per_tick,
+        change.flanger_rate_hz,
+    )?;
+    apply_fx_value(
+        &mut next.flanger_depth,
+        &mut next.flanger_depth_step_per_tick,
+        change.flanger_depth,
+    )?;
+    apply_fx_value(
+        &mut next.flanger_delay_ms,
+        &mut next.flanger_delay_step_per_tick,
+        change.flanger_delay_ms,
+    )?;
+    apply_fx_value(
+        &mut next.flanger_feedback,
+        &mut next.flanger_feedback_step_per_tick,
+        change.flanger_feedback,
+    )?;
+    apply_fx_value(
+        &mut next.flanger_mix,
+        &mut next.flanger_mix_step_per_tick,
+        change.flanger_mix,
+    )?;
+    apply_fx_value(
+        &mut next.chorus_rate_hz,
+        &mut next.chorus_rate_step_per_tick,
+        change.chorus_rate_hz,
+    )?;
+    apply_fx_value(
+        &mut next.chorus_depth,
+        &mut next.chorus_depth_step_per_tick,
+        change.chorus_depth,
+    )?;
+    apply_fx_value(
+        &mut next.chorus_delay_ms,
+        &mut next.chorus_delay_step_per_tick,
+        change.chorus_delay_ms,
+    )?;
+    apply_fx_value(
+        &mut next.chorus_mix,
+        &mut next.chorus_mix_step_per_tick,
+        change.chorus_mix,
+    )?;
     apply_fx_value(
         &mut next.reverb_mix,
         &mut next.reverb_mix_step_per_tick,
@@ -2301,6 +2402,57 @@ fn apply_fx_value(
 }
 
 fn validate_fx(next: FxSettings) -> Result<FxSettings, String> {
+    if !(0.01..=8.0).contains(&next.flanger_rate_hz) {
+        return Err(format!(
+            "flanger rate {}Hz out of range 0.01..8",
+            next.flanger_rate_hz
+        ));
+    }
+    if !(0.0..=1.0).contains(&next.flanger_depth) {
+        return Err(format!(
+            "flanger depth {} out of range 0..1",
+            next.flanger_depth
+        ));
+    }
+    if !(0.1..=10.0).contains(&next.flanger_delay_ms) {
+        return Err(format!(
+            "flanger delay {}ms out of range 0.1..10",
+            next.flanger_delay_ms
+        ));
+    }
+    if !(-0.95..=0.95).contains(&next.flanger_feedback) {
+        return Err(format!(
+            "flanger feedback {} out of range -0.95..0.95",
+            next.flanger_feedback
+        ));
+    }
+    if !(0.0..=1.0).contains(&next.flanger_mix) {
+        return Err(format!(
+            "flanger mix {} out of range 0..1",
+            next.flanger_mix
+        ));
+    }
+    if !(0.01..=8.0).contains(&next.chorus_rate_hz) {
+        return Err(format!(
+            "chorus rate {}Hz out of range 0.01..8",
+            next.chorus_rate_hz
+        ));
+    }
+    if !(0.0..=1.0).contains(&next.chorus_depth) {
+        return Err(format!(
+            "chorus depth {} out of range 0..1",
+            next.chorus_depth
+        ));
+    }
+    if !(5.0..=35.0).contains(&next.chorus_delay_ms) {
+        return Err(format!(
+            "chorus delay {}ms out of range 5..35",
+            next.chorus_delay_ms
+        ));
+    }
+    if !(0.0..=1.0).contains(&next.chorus_mix) {
+        return Err(format!("chorus mix {} out of range 0..1", next.chorus_mix));
+    }
     if !(0.0..=1.0).contains(&next.reverb_mix) {
         return Err(format!("reverb mix {} out of range 0..1", next.reverb_mix));
     }

@@ -385,10 +385,16 @@ Relative changes only affect the parameter named. Tick changes such as
 
 ### FX
 
-Reverb and ping-pong delay use the same named-parameter and relative-change
-rules as VCF. They are off by default.
+Flanger, chorus, reverb, and ping-pong delay use the same named-parameter and
+relative-change rules as VCF. They are off by default.
 
 ```text
+flanger on
+flanger off
+flanger rate=<0.01..8> depth=<0..1> delay=<0.1..10> feedback=<-0.95..0.95> mix=<0..1>
+chorus on
+chorus off
+chorus rate=<0.01..8> depth=<0..1> delay=<5..35> mix=<0..1>
 reverb on
 reverb off
 reverb mix=<0..1> decay=<0..0.98>
@@ -402,6 +408,8 @@ fx off
 Examples:
 
 ```text
+flanger rate=0.18 depth=0.8 delay=2.5 feedback=0.55 mix=0.35
+chorus rate=0.7 depth=0.55 delay=18 mix=0.32
 reverb mix=0.25 decay=0.7
 pingpong time=0.33 feedback=0.45 mix=0.2
 delay mix=+0.1
@@ -410,7 +418,7 @@ delay feedback=+0
 fx off
 ```
 
-Delay and reverb are more expensive than the VCF in the real-time callback.
+Modulation, delay, and reverb are more expensive than the VCF in the real-time callback.
 For heavy sessions, prefer `cargo run --release` or a built release binary.
 
 ### Sessions

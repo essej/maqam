@@ -638,17 +638,32 @@ fn format_vcf_status(vcf: crate::vcf::VcfSettings) -> String {
 }
 
 fn format_fx_status(fx: crate::fx::FxSettings) -> String {
-    match (fx.reverb_enabled, fx.delay_enabled) {
-        (false, false) => "off".to_string(),
-        (true, false) => format!("rev:{:.2}/{:.2}", fx.reverb_mix, fx.reverb_decay),
-        (false, true) => format!(
+    let mut parts = Vec::new();
+    if fx.flanger_enabled {
+        parts.push(format!(
+            "flg:{:.2}/{:.2}/{:.2}",
+            fx.flanger_rate_hz, fx.flanger_feedback, fx.flanger_mix
+        ));
+    }
+    if fx.chorus_enabled {
+        parts.push(format!(
+            "chr:{:.2}/{:.2}/{:.2}",
+            fx.chorus_rate_hz, fx.chorus_depth, fx.chorus_mix
+        ));
+    }
+    if fx.reverb_enabled {
+        parts.push(format!("rev:{:.2}/{:.2}", fx.reverb_mix, fx.reverb_decay));
+    }
+    if fx.delay_enabled {
+        parts.push(format!(
             "delay:{:.2}/{:.2}/{:.2}",
             fx.delay_time_secs, fx.delay_feedback, fx.delay_mix
-        ),
-        (true, true) => format!(
-            "rev:{:.2}/{:.2} delay:{:.2}/{:.2}/{:.2}",
-            fx.reverb_mix, fx.reverb_decay, fx.delay_time_secs, fx.delay_feedback, fx.delay_mix
-        ),
+        ));
+    }
+    if parts.is_empty() {
+        "off".to_string()
+    } else {
+        parts.join(" ")
     }
 }
 
