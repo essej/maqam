@@ -129,6 +129,19 @@ impl App {
         app
     }
 
+    fn reset_transient_view_state(&mut self) {
+        self.input.clear();
+        self.message_scroll = 0;
+        self.show_help = false;
+        self.show_jins = false;
+        self.help_scroll = 0;
+        self.jins_scroll = 0;
+        self.history_pos = None;
+        self.saved_input.clear();
+        self.cursor_pos = 0;
+        self.auditioning_jins = false;
+    }
+
     // ── History ───────────────────────────────────────────────────────────
 
     pub fn history_push(&mut self, cmd: &str) {
@@ -2612,6 +2625,7 @@ impl App {
         self.vol = new_vol;
         self.live_nam_commands = live_nam_commands;
         self.paused = false;
+        self.reset_transient_view_state();
         let (start_bpm, start_sustain, start_vcf, start_fx) = self.sequence_start_settings();
 
         let _ = self.audio_tx.send(AudioCmd::Clear);
@@ -2808,6 +2822,7 @@ impl App {
         self.fx = new_fx;
         self.vol = new_vol;
         self.paused = false;
+        self.reset_transient_view_state();
         let (start_bpm, start_sustain, start_vcf, start_fx) = self.sequence_start_settings();
 
         let _ = self.audio_tx.send(AudioCmd::Clear);
@@ -2942,6 +2957,7 @@ impl App {
         self.fx = new_fx;
         self.vol = new_vol;
         self.paused = false;
+        self.reset_transient_view_state();
         let (start_bpm, start_sustain, start_vcf, start_fx) = self.sequence_start_settings();
 
         let _ = self.audio_tx.send(AudioCmd::Clear);
@@ -6997,6 +7013,37 @@ mod tests {
 
         assert_eq!(app.phrases.len(), 9);
         assert_eq!(app.next_phrase_id, 9);
+    }
+
+    #[test]
+    fn load_session_resets_transient_view_state() {
+        let _guard = session_test_lock();
+        let (tx, _rx) = bounded(32);
+        let mut app = App::new(tx);
+        app.input = "stale command".to_string();
+        app.show_help = true;
+        app.show_jins = true;
+        app.help_scroll = 12;
+        app.jins_scroll = 7;
+        app.message_scroll = 4;
+        app.history_pos = Some(0);
+        app.saved_input = "saved".to_string();
+        app.cursor_pos = 3;
+        app.auditioning_jins = true;
+
+        app.load_session_v3(["P|0|1|d bayati 4444"].into_iter())
+            .unwrap();
+
+        assert!(app.input.is_empty());
+        assert!(!app.show_help);
+        assert!(!app.show_jins);
+        assert_eq!(app.help_scroll, 0);
+        assert_eq!(app.jins_scroll, 0);
+        assert_eq!(app.message_scroll, 0);
+        assert!(app.history_pos.is_none());
+        assert!(app.saved_input.is_empty());
+        assert_eq!(app.cursor_pos, 0);
+        assert!(!app.auditioning_jins);
     }
 
     #[test]
