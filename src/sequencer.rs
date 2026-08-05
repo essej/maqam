@@ -62,6 +62,7 @@ impl Bar {
 #[derive(Debug, Clone)]
 pub struct JumpSpec {
     pub target_id: usize, // stable phrase id of the jump target
+    pub fail_target_id: Option<usize>,
     pub times: usize,
 }
 
@@ -145,13 +146,28 @@ fn empty_bar() -> Bar {
 }
 
 /// Build a jump-entry phrase (no audio — pure sequencer control flow).
-pub fn build_jump_entry(id: usize, target_id: usize, times: usize) -> Phrase {
+pub fn build_jump_entry(
+    id: usize,
+    target_id: usize,
+    fail_target_id: Option<usize>,
+    times: usize,
+) -> Phrase {
     Phrase {
         id,
-        src: format!("j {target_id} {times}"),
+        src: if times == 0 {
+            format!("j {target_id} always")
+        } else if let Some(fail) = fail_target_id {
+            format!("j {target_id} else {fail} {times}")
+        } else {
+            format!("j {target_id} {times}")
+        },
         bar: empty_bar(),
         repeat: 1,
-        jump: Some(JumpSpec { target_id, times }),
+        jump: Some(JumpSpec {
+            target_id,
+            fail_target_id,
+            times,
+        }),
         control: None,
     }
 }

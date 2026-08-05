@@ -210,6 +210,8 @@ stable: deleting or moving entries does not renumber existing IDs.
 
 ```text
 j <id> <times>                       jump back to id, then fall through; times 1 is a no-op
+j <success> else <fail> <times>      branch explicitly on counter success/exhaustion
+j <id> always                        unconditional jump with no counter
 j start [times]                      jump to the current top timeline item
 i <id> <command>                     insert before id
 edit <id> <command>                  replace an entry

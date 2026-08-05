@@ -442,6 +442,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
     let mut nam_enabled = true;
     let mut nam_gain = 1.0f32;
     let mut nam_input = NamInput::Stereo;
+    let mut nam_mix = 0.0f32;
     let mut latency_test: Option<crossbeam_channel::Sender<Result<f64, String>>> = None;
     let mut latency_ms_ema: Option<f64> = None;
     let mut meter_peaks = [0.0f32; 3];
@@ -780,16 +781,23 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         let _ = result_tx.send(result);
                     }
                 }
-                let mut live_input = match nam_input {
+                let dry_input = match nam_input {
                     NamInput::Left => input[0],
                     NamInput::Right => input[1],
                     NamInput::Stereo => (input[0] + input[1]) * 0.5,
                 };
-                if nam_enabled {
-                    if let Some(model) = nam_model.as_mut() {
-                        live_input = model.process_sample(live_input * nam_gain);
-                    }
-                }
+                let modeled_input = nam_model
+                    .as_mut()
+                    .map(|model| model.process_sample(dry_input * nam_gain))
+                    .unwrap_or(dry_input);
+                let target_mix = if nam_enabled && nam_model.is_some() {
+                    1.0
+                } else {
+                    0.0
+                };
+                let mix_step = (1.0 / (sr as f32 * 0.02)).min(1.0);
+                nam_mix += (target_mix - nam_mix).clamp(-mix_step, mix_step);
+                let live_input = dry_input + (modeled_input - dry_input) * nam_mix;
                 meter_peaks[2] = meter_peaks[2].max(live_input.abs());
                 if last_metrics_publish.elapsed() >= std::time::Duration::from_secs(10) {
                     if let Some(latency_ms) = latency_ms_ema {
@@ -1011,6 +1019,15 @@ fn tick_sequencer(
             (p.id, p.jump.clone())
         };
         if let Some(js) = jump {
+            if js.times == 0 {
+                *cur_phrase = phrases
+                    .iter()
+                    .position(|p| p.phrase.id == js.target_id)
+                    .unwrap_or(0)
+                    .min(phrases.len().saturating_sub(1));
+                crate::CUR_PHRASE.store(*cur_phrase, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
             let limit = js.times.max(1);
             let value = jump_counters.entry(pid).or_insert(0);
             let incremented = value.saturating_add(1);
@@ -1027,10 +1044,10 @@ fn tick_sequencer(
             } else {
                 *value = 0;
                 crate::CUR_JUMP_VALUE.store(0, std::sync::atomic::Ordering::Relaxed);
-                *cur_phrase += 1;
-                if *cur_phrase >= phrases.len() {
-                    *cur_phrase = 0;
-                }
+                *cur_phrase = js
+                    .fail_target_id
+                    .and_then(|id| phrases.iter().position(|p| p.phrase.id == id))
+                    .unwrap_or_else(|| (*cur_phrase + 1) % phrases.len());
                 crate::CUR_PHRASE.store(*cur_phrase, std::sync::atomic::Ordering::Relaxed);
             }
             if let Ok(mut jc) = crate::jump_counters().try_lock() {
@@ -1089,7 +1106,7 @@ fn tick_sequencer(
             let p = &phrases[pos].phrase;
             if let Some(js) = &p.jump {
                 let value = jump_counters.get(&p.id).copied().unwrap_or(0);
-                if value.saturating_add(1) < js.times.max(1) {
+                if js.times == 0 || value.saturating_add(1) < js.times.max(1) {
                     let target = phrases
                         .iter()
                         .position(|pp| pp.phrase.id == js.target_id)
@@ -1097,6 +1114,12 @@ fn tick_sequencer(
                     // A jump may target a control or another jump. Continue
                     // simulating until prediction reaches a musical phrase.
                     pos = target;
+                    continue;
+                } else if let Some(fail_id) = js.fail_target_id {
+                    pos = phrases
+                        .iter()
+                        .position(|pp| pp.phrase.id == fail_id)
+                        .unwrap_or((pos + 1) % n);
                     continue;
                 }
                 pos = (pos + 1) % n;

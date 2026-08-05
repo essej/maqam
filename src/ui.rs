@@ -225,25 +225,46 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .lock()
         .map(|counters| counters.clone())
         .unwrap_or_default();
-    let jumpbacks: Vec<(usize, usize, usize, usize)> = app
+    let jumpbacks: Vec<(usize, usize, usize, usize, bool)> = app
         .phrases
         .iter()
         .enumerate()
-        .filter_map(|(source, phrase)| {
-            let jump = phrase.jump.as_ref()?;
-            let target = id_positions.get(&jump.target_id).copied()?;
-            (target != source).then_some((target, source, phrase.id, jump.times))
+        .flat_map(|(source, phrase)| {
+            let Some(jump) = phrase.jump.as_ref() else {
+                return Vec::new();
+            };
+            let mut branches = Vec::new();
+            if let Some(target) = id_positions.get(&jump.target_id).copied() {
+                if target != source {
+                    branches.push((target, source, phrase.id, jump.times, false));
+                }
+            }
+            if let Some(target) = jump
+                .fail_target_id
+                .and_then(|id| id_positions.get(&id).copied())
+            {
+                if target != source {
+                    branches.push((target, source, phrase.id, jump.times, true));
+                }
+            }
+            branches
         })
         .collect();
     let status_width = app
         .phrases
         .iter()
         .fold("[settings]".len(), |width, phrase| {
-            let total = phrase
-                .jump
-                .as_ref()
-                .map_or(phrase.repeat.max(1), |jump| jump.times);
-            width.max(format!("[{total}/{total}]").len())
+            let status = phrase.jump.as_ref().map_or_else(
+                || format!("[{0}/{0}]", phrase.repeat.max(1)),
+                |jump| {
+                    if jump.times == 0 {
+                        "[always]".into()
+                    } else {
+                        format!("[{0}/{0}]", jump.times)
+                    }
+                },
+            );
+            width.max(status.len())
         });
 
     let mut items: Vec<ListItem> = Vec::new();
@@ -263,14 +284,15 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         };
         let jump_prefix: Vec<Span> = jumpbacks
             .iter()
-            .map(|&(target, source, jump_id, times)| {
+            .map(|&(target, source, jump_id, times, failure_branch)| {
                 let on_path = target.min(source) <= idx && idx <= target.max(source);
                 if !on_path {
                     return Span::styled("    ", Style::default().fg(INACTIVE_GRAY).bg(BG));
                 }
                 let value = live_jump_counters.get(&jump_id).copied().unwrap_or(0);
-                let will_jump =
-                    Some(source) == upcoming_jump_source && value.saturating_add(1) < times.max(1);
+                let success = times == 0 || value.saturating_add(1) < times.max(1);
+                let will_jump = Some(source) == upcoming_jump_source
+                    && if failure_branch { !success } else { success };
                 // The source endpoint describes the immediate transition,
                 // so do not fill it while the current phrase still has
                 // another local repeat to play.  Paused score prediction
@@ -314,12 +336,20 @@ fn draw_phrases(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         };
         // Jump entries — show live counter for every jump, not just the playing one
         if let Some(ref js) = phrase.jump {
-            let valid_target = app.phrases.iter().any(|p| p.id == js.target_id);
+            let valid_target = app.phrases.iter().any(|p| p.id == js.target_id)
+                && js
+                    .fail_target_id
+                    .is_none_or(|id| app.phrases.iter().any(|p| p.id == id));
             // Read counter from the shared map (written by audio thread)
             let pass = live_jump_counters.get(&phrase.id).copied().unwrap_or(0);
             let total = js.times;
-            let displayed_pass = pass.saturating_add(1).min(total.max(1));
-            let counter = format!("{:<status_width$} ", format!("[{displayed_pass}/{total}]"));
+            let counter_text = if total == 0 {
+                "[always]".to_string()
+            } else {
+                let displayed_pass = pass.saturating_add(1).min(total);
+                format!("[{displayed_pass}/{total}]")
+            };
+            let counter = format!("{counter_text:<status_width$} ");
 
             let col_src = if !valid_target {
                 Color::Rgb(255, 80, 80)

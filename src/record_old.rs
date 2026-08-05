@@ -416,6 +416,15 @@ fn expand_one_cycle(
         let phrase = &phrases[cur];
         if let Some(js) = &phrase.jump {
             let pid = phrase.id;
+            if js.times == 0 {
+                cur = phrases
+                    .iter()
+                    .position(|p| p.id == js.target_id)
+                    .unwrap_or(0)
+                    .min(phrases.len().saturating_sub(1));
+                arrived_via_jump = Some(pid);
+                continue;
+            }
             let limit = js.times.max(1);
             let value = jc.entry(pid).or_insert(0);
             let incremented = value.saturating_add(1);
@@ -430,7 +439,10 @@ fn expand_one_cycle(
                 arrived_via_jump = Some(pid);
             } else {
                 *value = 0;
-                cur += 1;
+                cur = js
+                    .fail_target_id
+                    .and_then(|id| phrases.iter().position(|p| p.id == id))
+                    .unwrap_or(cur + 1);
             }
             continue;
         }

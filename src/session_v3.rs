@@ -30,7 +30,14 @@ pub fn serialize_session_v3(phrases: &[Phrase]) -> String {
 
     for p in phrases {
         if let Some(j) = &p.jump {
-            out.push_str(&format!("J|{}|{}|{}\n", p.id, j.target_id, j.times));
+            if let Some(fail) = j.fail_target_id {
+                out.push_str(&format!(
+                    "J|{}|{}|{}|{}\n",
+                    p.id, j.target_id, fail, j.times
+                ));
+            } else {
+                out.push_str(&format!("J|{}|{}|{}\n", p.id, j.target_id, j.times));
+            }
         } else if let Some(ctrl) = p.control {
             match ctrl {
                 ControlSpec::Stop => out.push_str(&format!("T|{}|stop\n", p.id)),

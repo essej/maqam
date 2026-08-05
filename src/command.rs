@@ -560,7 +560,7 @@ pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
         ],
     },
     LanguagePatternMetadata {
-        syntax: "j <id> <times>",
+        syntax: "j <success-id> [else <fail-id>] <times|always>",
         description: "jump back or forward to an existing timeline id",
         notes: &[
             "use jumps only to restart a multi-row section after its intended duration",
@@ -568,6 +568,7 @@ pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
             "jump times count passes through the jump row, not phrase rows and not bars",
             "for a restart after 16 bars, count 16 steps in time, not 16 phrase rows; count time bars from rhythm group totals and phrase repeats, then place one jump at that point",
             "a jump with times 1 is a no-op; do not generate `j <id> 1`",
+            "`else <id>` replaces fall-through with an explicit failure address when the counter exhausts",
             "keep generated scores readable in about a dozen timeline rows",
         ],
     },
@@ -926,6 +927,7 @@ pub enum Cmd {
     },
     Jump {
         to: isize,
+        fail_to: Option<isize>,
         times: usize,
     },
     Insert {
@@ -981,6 +983,7 @@ pub enum Cmd {
     EditJump {
         id: isize,
         to: isize,
+        fail_to: Option<isize>,
         times: usize,
     },
     EditBpm {
@@ -1022,6 +1025,7 @@ pub enum Cmd {
     InsertJump {
         before: isize,
         to: isize,
+        fail_to: Option<isize>,
         times: usize,
     },
     DeleteBars(Vec<isize>),
@@ -1224,16 +1228,29 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
                 .transpose()?
                 .ok_or("usage: j <pos> [times]")?
         };
-        let times_idx = if digits.is_empty() { 2 } else { 1 };
-        let times: usize = input
-            .split_whitespace()
-            .nth(times_idx)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1);
-        return Ok(Cmd::Jump {
-            to,
-            times: times.max(1),
-        });
+        let words = input.split_whitespace().collect::<Vec<_>>();
+        let base = if digits.is_empty() { 2 } else { 1 };
+        let (fail_to, times_token) = if words
+            .get(base)
+            .is_some_and(|word| word.eq_ignore_ascii_case("else"))
+        {
+            let fail_to = words
+                .get(base + 1)
+                .ok_or("usage: j <success> else <fail> [times]")?
+                .parse::<isize>()
+                .map_err(|_| "bad jump failure address")?;
+            (Some(fail_to), words.get(base + 2).copied())
+        } else {
+            (None, words.get(base).copied())
+        };
+        let times: usize = match times_token.map(str::to_ascii_lowercase).as_deref() {
+            Some("always" | "forever" | "∞") => 0,
+            Some(value) => value
+                .parse()
+                .map_err(|_| "jump times must be a number or `always`")?,
+            None => 1,
+        };
+        return Ok(Cmd::Jump { to, fail_to, times });
     }
 
     // ── EDIT: edit <id> <cmd> ─────────────────────────────────────────────
@@ -1260,7 +1277,12 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
                 specs,
                 repeat,
             }),
-            Cmd::Jump { to, times } => Ok(Cmd::EditJump { id, to, times }),
+            Cmd::Jump { to, fail_to, times } => Ok(Cmd::EditJump {
+                id,
+                to,
+                fail_to,
+                times,
+            }),
             Cmd::SetBpm(change) => Ok(Cmd::EditBpm { id, change }),
             Cmd::SetSustain(change) => Ok(Cmd::EditSustain { id, change }),
             Cmd::SetVcf(change) => Ok(Cmd::EditVcf { id, change }),
@@ -1323,7 +1345,12 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
                 specs,
                 repeat,
             }),
-            Cmd::Jump { to, times } => Ok(Cmd::InsertJump { before, to, times }),
+            Cmd::Jump { to, fail_to, times } => Ok(Cmd::InsertJump {
+                before,
+                to,
+                fail_to,
+                times,
+            }),
             Cmd::SetBpm(change) => Ok(Cmd::InsertBpm { before, change }),
             Cmd::SetSustain(change) => Ok(Cmd::InsertSustain { before, change }),
             Cmd::SetVcf(change) => Ok(Cmd::InsertVcf { before, change }),

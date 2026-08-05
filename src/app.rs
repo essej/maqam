@@ -784,8 +784,8 @@ impl App {
                     self.ask_llm(provider, prompt);
                 }
             }
-            Cmd::Jump { to, times } => {
-                if times <= 1 {
+            Cmd::Jump { to, fail_to, times } => {
+                if times == 1 {
                     self.message =
                         Some("✗ jump ×1 is a no-op; use j <id> 2 or omit the jump".into());
                     return;
@@ -798,9 +798,19 @@ impl App {
                     self.message = Some(format!("✗ no phrase id {to}"));
                     return;
                 }
+                let fail_to = match fail_to {
+                    Some(value) => match self.resolve_id_ref(value) {
+                        Some(id) if self.phrases.iter().any(|p| p.id == id) => Some(id),
+                        _ => {
+                            self.message = Some(format!("✗ no failure phrase id {value}"));
+                            return;
+                        }
+                    },
+                    None => None,
+                };
                 let id = self.next_phrase_id;
                 self.next_phrase_id += 1;
-                let entry = crate::sequencer::build_jump_entry(id, to, times);
+                let entry = crate::sequencer::build_jump_entry(id, to, fail_to, times);
                 let _ = self.audio_tx.send(AudioCmd::AddPhrase(entry.clone()));
                 self.phrases.push(entry);
                 self.message = None;
@@ -846,8 +856,13 @@ impl App {
                 self.message = Some(format!("inserted at {pos}"));
             }
 
-            Cmd::InsertJump { before, to, times } => {
-                if times <= 1 {
+            Cmd::InsertJump {
+                before,
+                to,
+                fail_to,
+                times,
+            } => {
+                if times == 1 {
                     self.message = Some(
                         "✗ jump ×1 is a no-op; insert a phrase/control line or use j <id> 2".into(),
                     );
@@ -861,6 +876,16 @@ impl App {
                     self.message = Some(format!("✗ no phrase id {to}"));
                     return;
                 }
+                let fail_to = match fail_to {
+                    Some(value) => match self.resolve_id_ref(value) {
+                        Some(id) if self.phrases.iter().any(|p| p.id == id) => Some(id),
+                        _ => {
+                            self.message = Some(format!("✗ no failure phrase id {value}"));
+                            return;
+                        }
+                    },
+                    None => None,
+                };
                 let insert_pos = match self.resolve_id_ref(before) {
                     Some(before_id) => self
                         .phrases
@@ -874,7 +899,7 @@ impl App {
                 };
                 let id = self.next_phrase_id;
                 self.next_phrase_id += 1;
-                let entry = crate::sequencer::build_jump_entry(id, to, times);
+                let entry = crate::sequencer::build_jump_entry(id, to, fail_to, times);
                 self.phrases.insert(insert_pos, entry.clone());
                 let _ = self.audio_tx.send(AudioCmd::InsertPhrase {
                     pos: insert_pos,
@@ -1375,8 +1400,13 @@ impl App {
                 self.apply_nam_command(command);
             }
 
-            Cmd::EditJump { id, to, times } => {
-                if times <= 1 {
+            Cmd::EditJump {
+                id,
+                to,
+                fail_to,
+                times,
+            } => {
+                if times == 1 {
                     self.message = Some(
                         "✗ jump ×1 is a no-op; edit the row to a phrase/control line or use j <id> 2"
                             .into(),
@@ -1395,6 +1425,16 @@ impl App {
                     self.message = Some(format!("✗ no phrase id {to}"));
                     return;
                 }
+                let fail_to = match fail_to {
+                    Some(value) => match self.resolve_id_ref(value) {
+                        Some(id) if self.phrases.iter().any(|p| p.id == id) => Some(id),
+                        _ => {
+                            self.message = Some(format!("✗ no failure phrase id {value}"));
+                            return;
+                        }
+                    },
+                    None => None,
+                };
                 let pos = match self.phrases.iter().position(|p| p.id == id) {
                     Some(p) => p,
                     None => {
@@ -1402,7 +1442,7 @@ impl App {
                         return;
                     }
                 };
-                let mut entry = crate::sequencer::build_jump_entry(id, to, times);
+                let mut entry = crate::sequencer::build_jump_entry(id, to, fail_to, times);
                 entry.id = id; // preserve the original id
                 self.phrases[pos] = entry.clone();
                 let _ = self.audio_tx.send(AudioCmd::ReplacePhrase(entry));
@@ -2582,16 +2622,32 @@ impl App {
                         ControlSpec::SetVcf(change),
                     ));
                 }
-                Some("J") if fields.len() == 4 => {
+                Some("J") if fields.len() == 4 || fields.len() == 5 => {
                     let target = fields[2]
                         .trim()
                         .parse::<usize>()
                         .map_err(|_| format!("line {line_no}: bad jump target"))?;
-                    let times = fields[3]
+                    let (fail_target, times_field) =
+                        if fields.len() == 5 {
+                            (
+                                Some(fields[3].trim().parse::<usize>().map_err(|_| {
+                                    format!("line {line_no}: bad jump failure target")
+                                })?),
+                                4,
+                            )
+                        } else {
+                            (None, 3)
+                        };
+                    let times = fields[times_field]
                         .trim()
                         .parse::<usize>()
                         .map_err(|_| format!("line {line_no}: bad jump times"))?;
-                    loaded.push(crate::sequencer::build_jump_entry(id, target, times.max(1)));
+                    loaded.push(crate::sequencer::build_jump_entry(
+                        id,
+                        target,
+                        fail_target,
+                        times,
+                    ));
                 }
                 Some("P") if fields.len() == 4 => {
                     let repeat = fields[2]
@@ -2769,7 +2825,12 @@ impl App {
                     .parse::<usize>()
                     .map_err(|_| format!("line {line_no}: bad jump times"))?;
                 max_id = max_id.max(id);
-                loaded.push(crate::sequencer::build_jump_entry(id, target, times.max(1)));
+                loaded.push(crate::sequencer::build_jump_entry(
+                    id,
+                    target,
+                    None,
+                    times.max(1),
+                ));
                 continue;
             }
 
@@ -2921,12 +2982,22 @@ impl App {
                     next_id += 1;
                     loaded.push(phrase);
                 }
-                Cmd::Jump { to, times } => {
+                Cmd::Jump { to, fail_to, times } => {
                     if to < 0 {
                         return Err(format!("line {line_no}: negative ids are only supported in interactive commands"));
                     }
                     let target = to as usize;
-                    let entry = crate::sequencer::build_jump_entry(next_id, target, times.max(1));
+                    let fail_target = match fail_to {
+                        Some(value) if value < 0 => return Err(format!("line {line_no}: negative failure ids are only supported in interactive commands")),
+                        Some(value) => Some(value as usize),
+                        None => None,
+                    };
+                    let entry = crate::sequencer::build_jump_entry(
+                        next_id,
+                        target,
+                        fail_target,
+                        times.max(1),
+                    );
                     next_id += 1;
                     loaded.push(entry);
                 }
@@ -5723,6 +5794,26 @@ mod tests {
             Cmd::EditNam {
                 id: 2,
                 command: NamCommand::Input(NamInput::Stereo)
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_jump_success_and_failure_addresses() {
+        assert!(matches!(
+            command::parse("j 14 else 4 3").unwrap(),
+            Cmd::Jump {
+                to: 14,
+                fail_to: Some(4),
+                times: 3
+            }
+        ));
+        assert!(matches!(
+            command::parse("j 4 always").unwrap(),
+            Cmd::Jump {
+                to: 4,
+                fail_to: None,
+                times: 0
             }
         ));
     }
