@@ -2231,6 +2231,15 @@ impl App {
             return Err("empty file".into());
         };
         let header = header.trim();
+        // A newly selected score owns the complete NAM dependency lifecycle.
+        // Dropping these receivers prevents a download/login from the previous
+        // score from installing a model after this load completes.
+        self.nam_download_rx = None;
+        self.nam_download_progress = None;
+        self.tone3000_auth_rx = None;
+        self.pending_tone3000_download = None;
+        self.pending_nam_slot = None;
+        self.live_nam_commands.clear();
         if header == crate::session_v3::HEADER {
             return self.load_session_v3(lines);
         }
@@ -2685,6 +2694,7 @@ impl App {
         let (start_bpm, start_sustain, start_vcf, start_fx) = self.sequence_start_settings();
 
         let _ = self.audio_tx.send(AudioCmd::Clear);
+        let _ = self.audio_tx.send(AudioCmd::ResetSessionState);
         let _ = self.audio_tx.send(AudioCmd::SetBpm(start_bpm));
         let _ = self.audio_tx.send(AudioCmd::SetSustain(start_sustain));
         let _ = self.audio_tx.send(AudioCmd::SetVcfBank(start_vcf));
@@ -2887,6 +2897,7 @@ impl App {
         let (start_bpm, start_sustain, start_vcf, start_fx) = self.sequence_start_settings();
 
         let _ = self.audio_tx.send(AudioCmd::Clear);
+        let _ = self.audio_tx.send(AudioCmd::ResetSessionState);
         let _ = self.audio_tx.send(AudioCmd::SetBpm(start_bpm));
         let _ = self.audio_tx.send(AudioCmd::SetSustain(start_sustain));
         let _ = self.audio_tx.send(AudioCmd::SetVcfBank(start_vcf));
@@ -3032,6 +3043,7 @@ impl App {
         let (start_bpm, start_sustain, start_vcf, start_fx) = self.sequence_start_settings();
 
         let _ = self.audio_tx.send(AudioCmd::Clear);
+        let _ = self.audio_tx.send(AudioCmd::ResetSessionState);
         let _ = self.audio_tx.send(AudioCmd::SetBpm(start_bpm));
         let _ = self.audio_tx.send(AudioCmd::SetSustain(start_sustain));
         let _ = self.audio_tx.send(AudioCmd::SetVcfBank(start_vcf));
@@ -7135,6 +7147,21 @@ mod tests {
         assert!(app.saved_input.is_empty());
         assert_eq!(app.cursor_pos, 0);
         assert!(!app.auditioning_jins);
+    }
+
+    #[test]
+    fn load_session_resets_audio_effect_state() {
+        let _guard = session_test_lock();
+        let (tx, rx) = bounded(64);
+        let mut app = App::new(tx);
+        while rx.try_recv().is_ok() {}
+
+        app.load_session_v3(["P|0|1|d bayati 4444"].into_iter())
+            .unwrap();
+
+        assert!(rx
+            .try_iter()
+            .any(|command| matches!(command, AudioCmd::ResetSessionState)));
     }
 
     #[test]

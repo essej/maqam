@@ -442,6 +442,7 @@ pub enum AudioCmd {
         result_tx: crossbeam_channel::Sender<Result<f64, String>>,
     },
     Clear,
+    ResetSessionState,
     SetVol(f32),
     SetPaused(bool),
     SetCurPhrase(usize),

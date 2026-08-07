@@ -644,6 +644,22 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                             jc.clear();
                         }
                     }
+                    AudioCmd::ResetSessionState => {
+                        nam_model = None;
+                        nam_enabled = false;
+                        nam_gain = 1.0;
+                        nam_input = NamInput::Stereo;
+                        nam_mix = 0.0;
+                        crate::NAM_MODEL_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
+                        crate::NAM_STATUS.store(0, std::sync::atomic::Ordering::Relaxed);
+                        sympathetics_enabled = false;
+                        sympathetics = SympatheticBank::new(sr as f32);
+                        sympathetic_phrase_id = None;
+                        vcf = VcfBank::default();
+                        vcf_filters = FilterBank::new(sr as f32);
+                        fx = FxSettings::default();
+                        fx_processor = FxProcessor::new(sr as f32);
+                    }
                 }
             }
 
