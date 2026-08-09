@@ -6063,6 +6063,10 @@ mod tests {
             command::parse("nam gain 1.5").unwrap(),
             Cmd::SetNam(NamCommand::Gain(gain)) if (gain - 1.5).abs() < f32::EPSILON
         ));
+        assert!(matches!(
+            command::parse("nam gain 11").unwrap(),
+            Cmd::SetNam(NamCommand::Gain(gain)) if (gain - 11.0).abs() < f32::EPSILON
+        ));
         let parsed = command::parse("nam import metallica.nam as metallica").unwrap();
         let Cmd::SetNam(NamCommand::Import { path, name }) = parsed else {
             panic!("expected NAM import command");

@@ -1,6 +1,6 @@
 MAQAM_SESSION_V3
 N|18|nam tone3000 45896 as mesaboogie
-N|15|nam gain 1
+N|15|nam gain 1.5
 N|16|nam input right
 B|4|120
 V|8|vcf bass cut 100 res 0.98 drive 2

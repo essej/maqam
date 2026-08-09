@@ -269,7 +269,7 @@ nam tone3000 <tone-id> as <name>
 nam login
 nam logout
                   pin a canonical TONE3000 tone and load its A2 model
-nam gain <n>      set NAM input gain before the amp model (0..8)
+nam gain <n>      set NAM input gain before the amp model (0..11)
 nam input left|right|stereo
                   select channel 1, channel 2, or an equal mono mix
 nam latency left|right
