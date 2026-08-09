@@ -838,12 +838,14 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     meter_peaks = [0.0; 3];
                     last_metrics_publish = std::time::Instant::now();
                 }
+                let nam_active = nam_enabled && nam_model.is_some();
                 if voices.is_empty()
                     && !fx.active()
                     && !sympathetics_enabled
                     && !sympathetics.has_energy()
                     && !vcf.all.enabled
                     && !vcf.mic.enabled
+                    && !nam_active
                 {
                     vcf_filters.reset();
                     for sample in frame.iter_mut() {
@@ -852,7 +854,6 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     continue;
                 }
 
-                let nam_active = nam_enabled && nam_model.is_some();
                 let (mut dry_left, mut dry_right) = (0f32, 0f32);
                 let (mut mic_left, mut mic_right) = (0f32, 0f32);
                 let (mut bass_left, mut bass_right) = (0f32, 0f32);
@@ -932,14 +933,17 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     // ringing strings still decay into the output.
                     sympathetics.process(false, 0.0, 0.0, 0.0, 0.0)
                 };
-                if vcf.all.enabled {
-                    if nam_active {
+                if nam_active {
+                    if !vcf.all.enabled && vcf.mic.enabled {
+                        mic_left += live_input;
+                        mic_right += live_input;
+                    } else {
+                        // NAM is the live-input path. It must remain audible
+                        // without requiring the score to enable a VCF bus.
+                        // The master VCF, when enabled, is applied below.
                         dry_left += live_input;
                         dry_right += live_input;
                     }
-                } else if vcf.mic.enabled {
-                    mic_left += live_input;
-                    mic_right += live_input;
                 }
                 if vcf.all.enabled {
                     dry_left += sympathetic;
