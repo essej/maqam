@@ -1,6 +1,6 @@
 MAQAM_SESSION_V3
 S|7|2
-V|2|vcf off
+Y|15|sym on drive 0.25 amount 0.025
 V|1|vcf kanun cut 200 res 0.9 drive 1 wave tri
 V|14|vcf kanun cut +10t res +0.01t drive 1 wave tri
 B|4|120
