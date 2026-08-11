@@ -62,9 +62,10 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME}"
           archive="maqam-live-${version}-${{ matrix.target }}"
-          mkdir -p dist
-          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.bin }}"
-          tar -C dist -czf "${archive}.${{ matrix.archive_ext }}" "${{ matrix.bin }}"
+          package_dir="maqam-live-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${package_dir}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${package_dir}/${{ matrix.bin }}"
+          tar -C dist -czf "${archive}.${{ matrix.archive_ext }}" "${package_dir}"
           shasum -a 256 "${archive}.${{ matrix.archive_ext }}" > "${archive}.${{ matrix.archive_ext }}.sha256"
 
       - name: Package release (Windows)
@@ -72,9 +73,10 @@ jobs:
         shell: pwsh
         run: |
           $archive = "maqam-live-${{ github.ref_name }}-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.bin }}"
-          Compress-Archive -Path "dist/${{ matrix.bin }}" -DestinationPath "$archive.${{ matrix.archive_ext }}" -Force
+          $packageDir = "maqam-live-${{ github.ref_name }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$packageDir" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/$packageDir/${{ matrix.bin }}"
+          Compress-Archive -Path "dist/$packageDir" -DestinationPath "$archive.${{ matrix.archive_ext }}" -Force
           $hash = (Get-FileHash "$archive.${{ matrix.archive_ext }}" -Algorithm SHA256).Hash.ToLower()
           "$hash  $archive.${{ matrix.archive_ext }}" | Set-Content -Encoding ascii "$archive.${{ matrix.archive_ext }}.sha256"
 
