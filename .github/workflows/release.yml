@@ -65,7 +65,7 @@ jobs:
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.bin }}"
           tar -C dist -czf "${archive}.${{ matrix.archive_ext }}" "${{ matrix.bin }}"
-          sha256sum "${archive}.${{ matrix.archive_ext }}" > "${archive}.${{ matrix.archive_ext }}.sha256"
+          shasum -a 256 "${archive}.${{ matrix.archive_ext }}" > "${archive}.${{ matrix.archive_ext }}.sha256"
 
       - name: Package release (Windows)
         if: matrix.os == 'windows-latest'
