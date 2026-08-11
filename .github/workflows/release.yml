@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Linux build deps
         if: matrix.os == 'ubuntu-latest'
@@ -79,7 +79,7 @@ jobs:
           "$hash  $archive.${{ matrix.archive_ext }}" | Set-Content -Encoding ascii "$archive.${{ matrix.archive_ext }}.sha256"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: maqam-live-${{ matrix.target }}
           path: |
@@ -92,12 +92,12 @@ jobs:
     needs: build
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
