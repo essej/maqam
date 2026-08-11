@@ -20,10 +20,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bin: maqam-live
             archive_ext: tar.gz
-          - os: macos-13
-            target: x86_64-apple-darwin
-            bin: maqam-live
-            archive_ext: tar.gz
           - os: macos-14
             target: aarch64-apple-darwin
             bin: maqam-live
