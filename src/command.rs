@@ -952,6 +952,15 @@ pub enum Cmd {
         before: isize,
         change: FxChange,
     },
+    InsertVol {
+        before: isize,
+        value: f32,
+    },
+    InsertBusVol {
+        before: isize,
+        target: VcfTarget,
+        value: f32,
+    },
     InsertNam {
         before: isize,
         command: NamCommand,
@@ -1042,6 +1051,7 @@ pub enum Cmd {
     SetFx(FxChange),
     SetNam(NamCommand),
     SetVol(f32),
+    SetBusVol(VcfTarget, f32),
     Record(usize),
     TogglePause {
         start_id: Option<isize>,
@@ -1355,6 +1365,12 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             Cmd::SetSustain(change) => Ok(Cmd::InsertSustain { before, change }),
             Cmd::SetVcf(change) => Ok(Cmd::InsertVcf { before, change }),
             Cmd::SetFx(change) => Ok(Cmd::InsertFx { before, change }),
+            Cmd::SetVol(value) => Ok(Cmd::InsertVol { before, value }),
+            Cmd::SetBusVol(target, value) => Ok(Cmd::InsertBusVol {
+                before,
+                target,
+                value,
+            }),
             Cmd::SetNam(command) => Ok(Cmd::InsertNam { before, command }),
             Cmd::Sympathetics(enabled) => Ok(Cmd::InsertSympathetics { before, enabled }),
             Cmd::SympatheticDecay(decay) => Ok(Cmd::InsertSympatheticDecay { before, decay }),
@@ -1550,14 +1566,34 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
 
     // ── VOL ───────────────────────────────────────────────────────────────
     if al == "vol" {
+        let args: Vec<&str> = input.split_whitespace().skip(1).collect();
+        if args.len() == 2 {
+            let target = VcfTarget::parse(args[0]).ok_or_else(|| {
+                format!(
+                    "unknown volume target '{}'; use all, mic, bass, kanun, drums, or sym",
+                    args[0]
+                )
+            })?;
+            let n: f32 = args[1]
+                .parse()
+                .map_err(|_| format!("bad volume '{}'", args[1]))?;
+            if !(0.0..=2.0).contains(&n) {
+                return Err(format!("vol {} {n} out of range 0–2", target.as_str()));
+            }
+            return Ok(Cmd::SetBusVol(target, n));
+        }
         let n: f32 = if !digits.is_empty() {
             digits.parse().unwrap_or(1.0)
         } else {
-            input
-                .split_whitespace()
-                .nth(1)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1.0)
+            match args.as_slice() {
+                [] => 1.0,
+                [value] => value.parse().map_err(|_| format!("bad volume '{value}'"))?,
+                _ => {
+                    return Err(
+                        "usage: vol <0..2> | vol <all|mic|bass|kanun|drums|sym> <0..2>".into(),
+                    )
+                }
+            }
         };
         if !(0.0..=2.0).contains(&n) {
             return Err(format!("vol {n} out of range 0–2"));

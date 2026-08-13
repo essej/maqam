@@ -64,6 +64,8 @@ enum PendingControl {
     Sustain(f64),
     Vcf(VcfChange),
     Fx(crate::command::FxChange),
+    Vol(f32),
+    BusVol(VcfTarget, f32),
     NamEnabled(bool),
     NamGain(f32),
     NamInput(NamInput),
@@ -427,6 +429,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
     let mut bpm = 120.0f64;
     let mut sustain = 1.25f64;
     let mut vol = 1.0f32;
+    let mut bus_vol = [1.0f32; 6];
     let mut vcf = VcfBank::default();
     let mut vcf_filters = FilterBank::new(sr as f32);
     let mut fx = FxSettings::default();
@@ -534,6 +537,9 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     }
                     AudioCmd::SetVol(v) => {
                         vol = v;
+                    }
+                    AudioCmd::SetBusVol(target, value) => {
+                        bus_vol[volume_target_index(target)] = value;
                     }
                     AudioCmd::SetPaused(p) => {
                         paused = p;
@@ -694,6 +700,10 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                                 fx = setting;
                                 fx_processor.set_settings(setting);
                             }
+                        }
+                        PendingControl::Vol(value) => vol = value,
+                        PendingControl::BusVol(target, value) => {
+                            bus_vol[volume_target_index(target)] = value;
                         }
                         PendingControl::NamEnabled(enabled) => nam_enabled = enabled,
                         PendingControl::NamGain(gain) => nam_gain = gain.clamp(0.0, 11.0),
@@ -959,28 +969,28 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 if !vcf.all.enabled {
                     if vcf.mic.enabled {
                         let filtered = vcf_filters.mic.process(mic_left, mic_right);
-                        left += filtered.0;
-                        right += filtered.1;
+                        left += filtered.0 * bus_vol[volume_target_index(VcfTarget::Mic)];
+                        right += filtered.1 * bus_vol[volume_target_index(VcfTarget::Mic)];
                     }
                     if vcf.bass.enabled {
                         let filtered = vcf_filters.bass.process(bass_left, bass_right);
-                        left += filtered.0;
-                        right += filtered.1;
+                        left += filtered.0 * bus_vol[volume_target_index(VcfTarget::Bass)];
+                        right += filtered.1 * bus_vol[volume_target_index(VcfTarget::Bass)];
                     }
                     if vcf.kanun.enabled {
                         let filtered = vcf_filters.kanun.process(kanun_left, kanun_right);
-                        left += filtered.0;
-                        right += filtered.1;
+                        left += filtered.0 * bus_vol[volume_target_index(VcfTarget::Kanun)];
+                        right += filtered.1 * bus_vol[volume_target_index(VcfTarget::Kanun)];
                     }
                     if vcf.kick.enabled {
                         let filtered = vcf_filters.kick.process(kick_left, kick_right);
-                        left += filtered.0;
-                        right += filtered.1;
+                        left += filtered.0 * bus_vol[volume_target_index(VcfTarget::Kick)];
+                        right += filtered.1 * bus_vol[volume_target_index(VcfTarget::Kick)];
                     }
                     if vcf.tanbura.enabled {
                         let filtered = vcf_filters.tanbura.process(tanbura_left, tanbura_right);
-                        left += filtered.0;
-                        right += filtered.1;
+                        left += filtered.0 * bus_vol[volume_target_index(VcfTarget::Tanbura)];
+                        right += filtered.1 * bus_vol[volume_target_index(VcfTarget::Tanbura)];
                     }
                 }
                 if fx.active() {
@@ -991,8 +1001,10 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 let saturated = crate::analog::soft_clip_stereo(left * vol, right * vol);
                 if vcf.all.enabled {
                     let filtered = vcf_filters.all.process(saturated.0, saturated.1);
-                    left = filtered.0.clamp(-1.0, 1.0);
-                    right = filtered.1.clamp(-1.0, 1.0);
+                    left = (filtered.0 * bus_vol[volume_target_index(VcfTarget::All)])
+                        .clamp(-1.0, 1.0);
+                    right = (filtered.1 * bus_vol[volume_target_index(VcfTarget::All)])
+                        .clamp(-1.0, 1.0);
                 } else {
                     left = saturated.0.clamp(-1.0, 1.0);
                     right = saturated.1.clamp(-1.0, 1.0);
@@ -1088,6 +1100,8 @@ fn tick_sequencer(
                 ControlSpec::SetSustain(v) => PendingControl::Sustain(v),
                 ControlSpec::SetVcf(v) => PendingControl::Vcf(v),
                 ControlSpec::SetFx(v) => PendingControl::Fx(v),
+                ControlSpec::SetVol(v) => PendingControl::Vol(v),
+                ControlSpec::SetBusVol(target, value) => PendingControl::BusVol(target, value),
                 ControlSpec::SetNamEnabled(v) => PendingControl::NamEnabled(v),
                 ControlSpec::SetNamGain(v) => PendingControl::NamGain(v),
                 ControlSpec::SetNamInput(v) => PendingControl::NamInput(v),
@@ -1232,6 +1246,17 @@ fn vcf_target_for_kind(kind: VoiceKind) -> Option<VcfTarget> {
         VoiceKind::MelodyFm => Some(VcfTarget::Kanun),
         VoiceKind::FloorTom => Some(VcfTarget::Kick),
         _ => None,
+    }
+}
+
+fn volume_target_index(target: VcfTarget) -> usize {
+    match target {
+        VcfTarget::All => 0,
+        VcfTarget::Mic => 1,
+        VcfTarget::Bass => 2,
+        VcfTarget::Kanun => 3,
+        VcfTarget::Kick => 4,
+        VcfTarget::Tanbura => 5,
     }
 }
 

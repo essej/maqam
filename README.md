@@ -322,6 +322,8 @@ bpm <n|+n|-n|*k|/k>                  tempo, range 20..400
 s <n|+n|-n|*k|/k>                    sustain seconds, range 0.05..10
 sus <n|+n|-n|*k|/k>                  same as s
 vol <n>                              live volume multiplier, range 0..2
+vol <all|mic|bass|kanun|drums|sym> <n>
+                                     post-VCF bus volume, range 0..2
 tuneto <pitch>                       live tuning reference, e.g. tuneto c or tuneto b-
 ```
 
@@ -333,6 +335,7 @@ bpm *2
 s 1.5
 s *0.8
 vol 0.8
+vol mic 0.25
 ```
 
 `vol` and `tuneto` are live-only settings. They are not saved in sessions, and

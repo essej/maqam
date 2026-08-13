@@ -18,6 +18,28 @@ use std::path::{Path, PathBuf};
 // intentionally safe to ship in desktop/client applications; never embed the secret key.
 const TONE3000_PUBLISHABLE_CLIENT_ID: &str = "t3k_pub__1tkc-W6fWSyBUgGJdHj-bqpnPtFesDA";
 
+fn volume_targets() -> [VcfTarget; 6] {
+    [
+        VcfTarget::All,
+        VcfTarget::Mic,
+        VcfTarget::Bass,
+        VcfTarget::Kanun,
+        VcfTarget::Kick,
+        VcfTarget::Tanbura,
+    ]
+}
+
+fn volume_target_index(target: VcfTarget) -> usize {
+    match target {
+        VcfTarget::All => 0,
+        VcfTarget::Mic => 1,
+        VcfTarget::Bass => 2,
+        VcfTarget::Kanun => 3,
+        VcfTarget::Kick => 4,
+        VcfTarget::Tanbura => 5,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct NamDownloadProgress {
     pub name: String,
@@ -53,6 +75,7 @@ pub struct App {
     pub vcf: VcfBank,
     pub fx: FxSettings,
     pub vol: f32,
+    pub bus_vol: [f32; 6],
     pub tune_to: Pitch,
     pub live_nam_commands: Vec<String>,
     pub paused: bool,
@@ -97,6 +120,7 @@ impl App {
             vcf: VcfBank::default(),
             fx: FxSettings::default(),
             vol: 1.0,
+            bus_vol: [1.0; 6],
             tune_to: Pitch::parse("d").unwrap(),
             live_nam_commands: Vec::new(),
             paused: false,
@@ -126,6 +150,11 @@ impl App {
             app.message = Some(format!("✗ {err}"));
         }
         let _ = app.audio_tx.send(AudioCmd::SetVol(app.vol));
+        for (target, value) in volume_targets().into_iter().zip(app.bus_vol) {
+            if value != 1.0 {
+                let _ = app.audio_tx.send(AudioCmd::SetBusVol(target, value));
+            }
+        }
         app
     }
 
@@ -677,7 +706,9 @@ impl App {
                     | ControlSpec::SetSympathetic(_)
                     | ControlSpec::SetNamEnabled(_)
                     | ControlSpec::SetNamGain(_)
-                    | ControlSpec::SetNamInput(_) => {}
+                    | ControlSpec::SetNamInput(_)
+                    | ControlSpec::SetVol(_)
+                    | ControlSpec::SetBusVol(_, _) => {}
                 }
                 continue;
             }
@@ -1033,6 +1064,22 @@ impl App {
 
             Cmd::InsertNam { before, command } => self.insert_nam_control(before, command),
 
+            Cmd::InsertVol { before, value } => {
+                self.insert_sym_control(before, format!("vol {value}"), ControlSpec::SetVol(value));
+            }
+
+            Cmd::InsertBusVol {
+                before,
+                target,
+                value,
+            } => {
+                self.insert_sym_control(
+                    before,
+                    format!("vol {} {value}", target.as_str()),
+                    ControlSpec::SetBusVol(target, value),
+                );
+            }
+
             Cmd::InsertSympathetics { before, enabled } => {
                 self.insert_sym_control(
                     before,
@@ -1101,6 +1148,15 @@ impl App {
                 let _ = self.audio_tx.send(AudioCmd::SetVol(v));
                 self.message = Some(match self.save_globals() {
                     Ok(()) => format!("vol → {v:.2}"),
+                    Err(err) => format!("✗ {err}"),
+                });
+            }
+
+            Cmd::SetBusVol(target, value) => {
+                self.bus_vol[volume_target_index(target)] = value;
+                let _ = self.audio_tx.send(AudioCmd::SetBusVol(target, value));
+                self.message = Some(match self.save_globals() {
+                    Ok(()) => format!("vol {} → {value:.2}", target.as_str()),
                     Err(err) => format!("✗ {err}"),
                 });
             }
@@ -2175,7 +2231,13 @@ impl App {
 
     fn save_globals(&self) -> Result<(), String> {
         let path = self.globals_path();
-        let out = format!("vol {}\ntuneto {}\n", self.vol, self.tune_to.source_token());
+        let mut out = format!("vol {}\n", self.vol);
+        for (target, value) in volume_targets().into_iter().zip(self.bus_vol) {
+            if value != 1.0 {
+                out.push_str(&format!("vol {} {}\n", target.as_str(), value));
+            }
+        }
+        out.push_str(&format!("tuneto {}\n", self.tune_to.source_token()));
         fs::write(&path, out).map_err(|e| {
             format!(
                 "could not write {}; check directory permissions, then try the command again: {e}",
@@ -2209,13 +2271,16 @@ impl App {
                 Cmd::SetVol(value) => {
                     self.vol = value;
                 }
+                Cmd::SetBusVol(target, value) => {
+                    self.bus_vol[volume_target_index(target)] = value;
+                }
                 Cmd::TuneTo(pitch) => {
                     self.tune_to = pitch;
                     crate::tuning::tune_to_standard_pitch(pitch);
                 }
                 _ => {
                     return Err(format!(
-                        "{} line {line_no}: globals only support vol and tuneto; remove this line or change it to vol <n> or tuneto <pitch>",
+                        "{} line {line_no}: globals only support vol and tuneto; remove this line or change it to vol <n>, vol <target> <n>, or tuneto <pitch>",
                         path.display()
                     ));
                 }
@@ -2518,6 +2583,16 @@ impl App {
                         fx_change_src(change),
                         ControlSpec::SetFx(change),
                     ));
+                }
+                Some("L") if fields.len() == 3 => {
+                    let parsed =
+                        command::parse(&fields[2]).map_err(|e| format!("line {line_no}: {e}"))?;
+                    let control = match parsed {
+                        Cmd::SetVol(value) => ControlSpec::SetVol(value),
+                        Cmd::SetBusVol(target, value) => ControlSpec::SetBusVol(target, value),
+                        _ => return Err(format!("line {line_no}: expected vol line")),
+                    };
+                    loaded.push(build_control_entry(id, fields[2].clone(), control));
                 }
                 Some("N") if fields.len() == 3 => {
                     let parsed =
@@ -6284,6 +6359,55 @@ mod tests {
         } else {
             std::env::remove_var("MAQAM_GLOBALS_PATH");
         }
+    }
+
+    #[test]
+    fn targeted_volume_is_post_vcf_live_state() {
+        let _guard = session_test_lock();
+        let old_path = std::env::var("MAQAM_GLOBALS_PATH").ok();
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let globals_path = std::env::temp_dir().join(format!("maqam-bus-vol-{suffix}.ml"));
+        std::env::set_var("MAQAM_GLOBALS_PATH", &globals_path);
+
+        let (tx, rx) = bounded(16);
+        let mut app = App::new(tx);
+        while rx.try_recv().is_ok() {}
+        app.handle_command("vol mic 0.25");
+
+        assert_eq!(app.bus_vol[volume_target_index(VcfTarget::Mic)], 0.25);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AudioCmd::SetBusVol(VcfTarget::Mic, value)) if (value - 0.25).abs() < 0.0001
+        ));
+        assert_eq!(
+            fs::read_to_string(&globals_path).unwrap(),
+            "vol 1\nvol mic 0.25\ntuneto d\n"
+        );
+
+        let _ = fs::remove_file(&globals_path);
+        if let Some(path) = old_path {
+            std::env::set_var("MAQAM_GLOBALS_PATH", path);
+        } else {
+            std::env::remove_var("MAQAM_GLOBALS_PATH");
+        }
+    }
+
+    #[test]
+    fn targeted_volume_can_be_inserted_into_timeline() {
+        let (tx, _rx) = bounded(16);
+        let mut app = App::new(tx);
+        app.handle_command("d bayati 44");
+        app.handle_command("i 0 vol mic 0.25");
+
+        assert_eq!(app.phrases[0].src, "vol mic 0.25");
+        assert!(matches!(
+            app.phrases[0].control,
+            Some(ControlSpec::SetBusVol(VcfTarget::Mic, value))
+                if (value - 0.25).abs() < 0.0001
+        ));
     }
 
     #[test]

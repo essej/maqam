@@ -469,7 +469,9 @@ fn expand_one_cycle(
                 | ControlSpec::SetSympathetic(_)
                 | ControlSpec::SetNamEnabled(_)
                 | ControlSpec::SetNamGain(_)
-                | ControlSpec::SetNamInput(_) => {}
+                | ControlSpec::SetNamInput(_)
+                | ControlSpec::SetVol(_)
+                | ControlSpec::SetBusVol(_, _) => {}
             }
             cur += 1;
             continue;

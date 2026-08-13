@@ -49,6 +49,9 @@ pub fn serialize_session_v3(phrases: &[Phrase]) -> String {
                 ControlSpec::SetFx(_) => {
                     out.push_str(&format!("F|{}|{}\n", p.id, escape_field(&p.src)))
                 }
+                ControlSpec::SetVol(_) | ControlSpec::SetBusVol(_, _) => {
+                    out.push_str(&format!("L|{}|{}\n", p.id, escape_field(&p.src)))
+                }
                 ControlSpec::SetNamEnabled(_)
                 | ControlSpec::SetNamGain(_)
                 | ControlSpec::SetNamInput(_) => {
