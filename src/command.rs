@@ -1011,6 +1011,15 @@ pub enum Cmd {
         id: isize,
         change: FxChange,
     },
+    EditVol {
+        id: isize,
+        value: f32,
+    },
+    EditBusVol {
+        id: isize,
+        target: VcfTarget,
+        value: f32,
+    },
     EditNam {
         id: isize,
         command: NamCommand,
@@ -1297,6 +1306,8 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             Cmd::SetSustain(change) => Ok(Cmd::EditSustain { id, change }),
             Cmd::SetVcf(change) => Ok(Cmd::EditVcf { id, change }),
             Cmd::SetFx(change) => Ok(Cmd::EditFx { id, change }),
+            Cmd::SetVol(value) => Ok(Cmd::EditVol { id, value }),
+            Cmd::SetBusVol(target, value) => Ok(Cmd::EditBusVol { id, target, value }),
             Cmd::SetNam(command) => Ok(Cmd::EditNam { id, command }),
             Cmd::Sympathetics(enabled) => Ok(Cmd::EditSympathetics { id, enabled }),
             Cmd::SympatheticDecay(decay) => Ok(Cmd::EditSympatheticDecay { id, decay }),

@@ -596,7 +596,7 @@ impl App {
         resolve_id_ref_in_phrases(&self.phrases, id_ref)
     }
 
-    fn insert_sym_control(&mut self, before: isize, src: String, control: ControlSpec) {
+    fn insert_timeline_control(&mut self, before: isize, src: String, control: ControlSpec) {
         let insert_pos = match self.resolve_id_ref(before) {
             Some(before_id) => self
                 .phrases
@@ -616,10 +616,10 @@ impl App {
             pos: insert_pos,
             phrase: entry,
         });
-        self.message = Some(format!("inserted sym at {insert_pos}"));
+        self.message = Some(format!("inserted control at {insert_pos}"));
     }
 
-    fn replace_sym_control(&mut self, id_ref: isize, src: String, control: ControlSpec) {
+    fn replace_timeline_control(&mut self, id_ref: isize, src: String, control: ControlSpec) {
         let Some(id) = self.resolve_id_ref(id_ref) else {
             self.message = Some(format!("✗ no phrase id {id_ref}"));
             return;
@@ -631,7 +631,7 @@ impl App {
         let entry = build_control_entry(id, src, control);
         self.phrases[pos] = entry.clone();
         let _ = self.audio_tx.send(AudioCmd::ReplacePhrase(entry));
-        self.message = Some(format!("edited {id} → sym"));
+        self.message = Some(format!("edited {id} → control"));
     }
 
     fn insert_nam_control(&mut self, before: isize, command: NamCommand) {
@@ -1065,7 +1065,11 @@ impl App {
             Cmd::InsertNam { before, command } => self.insert_nam_control(before, command),
 
             Cmd::InsertVol { before, value } => {
-                self.insert_sym_control(before, format!("vol {value}"), ControlSpec::SetVol(value));
+                self.insert_timeline_control(
+                    before,
+                    format!("vol {value}"),
+                    ControlSpec::SetVol(value),
+                );
             }
 
             Cmd::InsertBusVol {
@@ -1073,7 +1077,7 @@ impl App {
                 target,
                 value,
             } => {
-                self.insert_sym_control(
+                self.insert_timeline_control(
                     before,
                     format!("vol {} {value}", target.as_str()),
                     ControlSpec::SetBusVol(target, value),
@@ -1081,7 +1085,7 @@ impl App {
             }
 
             Cmd::InsertSympathetics { before, enabled } => {
-                self.insert_sym_control(
+                self.insert_timeline_control(
                     before,
                     if enabled { "sym on" } else { "sym off" }.into(),
                     ControlSpec::SetSympathetics(enabled),
@@ -1089,7 +1093,7 @@ impl App {
             }
 
             Cmd::InsertSympatheticDecay { before, decay } => {
-                self.insert_sym_control(
+                self.insert_timeline_control(
                     before,
                     format!("sym decay {decay}"),
                     ControlSpec::SetSympatheticDecay(decay),
@@ -1097,7 +1101,7 @@ impl App {
             }
 
             Cmd::InsertSympatheticGain { before, gain } => {
-                self.insert_sym_control(
+                self.insert_timeline_control(
                     before,
                     format!("sym drive {gain}"),
                     ControlSpec::SetSympatheticGain(gain),
@@ -1105,7 +1109,7 @@ impl App {
             }
 
             Cmd::InsertSympathetic { before, change } => {
-                self.insert_sym_control(
+                self.insert_timeline_control(
                     before,
                     sym_change_src(change),
                     ControlSpec::SetSympathetic(change),
@@ -1653,8 +1657,24 @@ impl App {
 
             Cmd::EditNam { id, command } => self.replace_nam_control(id, command),
 
+            Cmd::EditVol { id, value } => {
+                self.replace_timeline_control(
+                    id,
+                    format!("vol {value}"),
+                    ControlSpec::SetVol(value),
+                );
+            }
+
+            Cmd::EditBusVol { id, target, value } => {
+                self.replace_timeline_control(
+                    id,
+                    format!("vol {} {value}", target.as_str()),
+                    ControlSpec::SetBusVol(target, value),
+                );
+            }
+
             Cmd::EditSympathetics { id, enabled } => {
-                self.replace_sym_control(
+                self.replace_timeline_control(
                     id,
                     if enabled { "sym on" } else { "sym off" }.into(),
                     ControlSpec::SetSympathetics(enabled),
@@ -1662,7 +1682,7 @@ impl App {
             }
 
             Cmd::EditSympatheticDecay { id, decay } => {
-                self.replace_sym_control(
+                self.replace_timeline_control(
                     id,
                     format!("sym decay {decay}"),
                     ControlSpec::SetSympatheticDecay(decay),
@@ -1670,7 +1690,7 @@ impl App {
             }
 
             Cmd::EditSympatheticGain { id, gain } => {
-                self.replace_sym_control(
+                self.replace_timeline_control(
                     id,
                     format!("sym gain {gain}"),
                     ControlSpec::SetSympatheticGain(gain),
@@ -1678,7 +1698,7 @@ impl App {
             }
 
             Cmd::EditSympathetic { id, change } => {
-                self.replace_sym_control(
+                self.replace_timeline_control(
                     id,
                     sym_change_src(change),
                     ControlSpec::SetSympathetic(change),
@@ -6397,6 +6417,7 @@ mod tests {
 
     #[test]
     fn targeted_volume_can_be_inserted_into_timeline() {
+        let _guard = session_test_lock();
         let (tx, _rx) = bounded(16);
         let mut app = App::new(tx);
         app.handle_command("d bayati 44");
@@ -6405,6 +6426,14 @@ mod tests {
         assert_eq!(app.phrases[0].src, "vol mic 0.25");
         assert!(matches!(
             app.phrases[0].control,
+            Some(ControlSpec::SetBusVol(VcfTarget::Mic, value))
+                if (value - 0.25).abs() < 0.0001
+        ));
+        app.handle_command("edit 0 vol mic 0.25");
+
+        assert_eq!(app.phrases[1].src, "vol mic 0.25");
+        assert!(matches!(
+            app.phrases[1].control,
             Some(ControlSpec::SetBusVol(VcfTarget::Mic, value))
                 if (value - 0.25).abs() < 0.0001
         ));
