@@ -445,11 +445,11 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
     let mut nam_enabled = true;
     let mut nam_gain = 1.0f32;
     let mut nam_input = NamInput::Stereo;
-    let mut nam_mix = 0.0f32;
     let mut latency_test: Option<crossbeam_channel::Sender<Result<f64, String>>> = None;
     let mut latency_ms_ema: Option<f64> = None;
     let mut meter_peaks = [0.0f32; 3];
     let mut last_metrics_publish = std::time::Instant::now();
+    let has_input_stream = input_stream.is_some();
 
     let stream = device.build_output_stream(
         &cfg.into(),
@@ -655,7 +655,6 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         nam_enabled = false;
                         nam_gain = 1.0;
                         nam_input = NamInput::Stereo;
-                        nam_mix = 0.0;
                         crate::NAM_MODEL_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
                         crate::NAM_STATUS.store(0, std::sync::atomic::Ordering::Relaxed);
                         sympathetics_enabled = false;
@@ -815,15 +814,10 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 let modeled_input = nam_model
                     .as_mut()
                     .map(|model| model.process_sample(dry_input * nam_gain))
-                    .unwrap_or(dry_input);
-                let target_mix = if nam_enabled && nam_model.is_some() {
-                    1.0
-                } else {
-                    0.0
-                };
-                let mix_step = (1.0 / (sr as f32 * 0.02)).min(1.0);
-                nam_mix += (target_mix - nam_mix).clamp(-mix_step, mix_step);
-                let live_input = dry_input + (modeled_input - dry_input) * nam_mix;
+                    .unwrap_or(dry_input)
+                    .clamp(-1.0, 1.0);
+                let live_input =
+                    select_nam_output(dry_input, modeled_input, nam_enabled && nam_model.is_some());
                 meter_peaks[2] = meter_peaks[2].max(live_input.abs());
                 if last_metrics_publish.elapsed() >= std::time::Duration::from_secs(10) {
                     if let Some(latency_ms) = latency_ms_ema {
@@ -849,7 +843,8 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     last_metrics_publish = std::time::Instant::now();
                 }
                 let nam_active = nam_enabled && nam_model.is_some();
-                if voices.is_empty()
+                if !has_input_stream
+                    && voices.is_empty()
                     && !fx.active()
                     && !sympathetics_enabled
                     && !sympathetics.has_energy()
@@ -863,7 +858,6 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     }
                     continue;
                 }
-
                 let (mut dry_left, mut dry_right) = (0f32, 0f32);
                 let (mut mic_left, mut mic_right) = (0f32, 0f32);
                 let (mut bass_left, mut bass_right) = (0f32, 0f32);
@@ -943,17 +937,14 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     // ringing strings still decay into the output.
                     sympathetics.process(false, 0.0, 0.0, 0.0, 0.0)
                 };
-                if nam_active {
-                    if !vcf.all.enabled && vcf.mic.enabled {
-                        mic_left += live_input;
-                        mic_right += live_input;
-                    } else {
-                        // NAM is the live-input path. It must remain audible
-                        // without requiring the score to enable a VCF bus.
-                        // The master VCF, when enabled, is applied below.
-                        dry_left += live_input;
-                        dry_right += live_input;
-                    }
+                if !vcf.all.enabled {
+                    // NAM on selects only modeled input; NAM off selects only
+                    // clean input. Both use the same mic output bus and trim.
+                    mic_left += live_input;
+                    mic_right += live_input;
+                } else {
+                    dry_left += live_input;
+                    dry_right += live_input;
                 }
                 if vcf.all.enabled {
                     dry_left += sympathetic;
@@ -966,11 +957,13 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     dry_right += sympathetic;
                 }
                 let (mut left, mut right) = (dry_left, dry_right);
+                let mut post_vcf_mic = (0.0f32, 0.0f32);
                 if !vcf.all.enabled {
                     if vcf.mic.enabled {
                         let filtered = vcf_filters.mic.process(mic_left, mic_right);
-                        left += filtered.0 * bus_vol[volume_target_index(VcfTarget::Mic)];
-                        right += filtered.1 * bus_vol[volume_target_index(VcfTarget::Mic)];
+                        post_vcf_mic = filtered;
+                    } else {
+                        post_vcf_mic = (mic_left, mic_right);
                     }
                     if vcf.bass.enabled {
                         let filtered = vcf_filters.bass.process(bass_left, bass_right);
@@ -1008,6 +1001,12 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                 } else {
                     left = saturated.0.clamp(-1.0, 1.0);
                     right = saturated.1.clamp(-1.0, 1.0);
+                }
+                if !vcf.all.enabled {
+                    let mic_gain = bus_vol[volume_target_index(VcfTarget::Mic)];
+                    let mic_output = post_vcf_output_stem(post_vcf_mic, vol, mic_gain);
+                    left = (left + mic_output.0).clamp(-1.0, 1.0);
+                    right = (right + mic_output.1).clamp(-1.0, 1.0);
                 }
 
                 if frame.len() >= 2 {
@@ -1260,9 +1259,40 @@ fn volume_target_index(target: VcfTarget) -> usize {
     }
 }
 
+fn post_vcf_output_stem(stem: (f32, f32), master_gain: f32, output_gain: f32) -> (f32, f32) {
+    let gain = master_gain * output_gain;
+    (
+        stem.0.clamp(-1.0, 1.0) * gain,
+        stem.1.clamp(-1.0, 1.0) * gain,
+    )
+}
+
+fn select_nam_output(dry: f32, modeled: f32, active: bool) -> f32 {
+    if active {
+        modeled
+    } else {
+        dry
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_vcf_trim_is_strictly_linear() {
+        let full = post_vcf_output_stem((4.0, -4.0), 1.0, 1.0);
+        let quiet = post_vcf_output_stem((4.0, -4.0), 1.0, 0.125);
+        assert_eq!(full, (1.0, -1.0));
+        assert!((quiet.0 - full.0 * 0.125).abs() < 1e-6);
+        assert!((quiet.1 - full.1 * 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn active_nam_has_no_parallel_dry_signal() {
+        assert_eq!(select_nam_output(0.75, -0.25, true), -0.25);
+        assert_eq!(select_nam_output(0.75, -0.25, false), 0.75);
+    }
     use crate::command::{SympatheticHarmony, SympatheticHarmonyComponent};
 
     #[test]
