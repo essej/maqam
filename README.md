@@ -522,14 +522,14 @@ clockout <device>      send MIDI clock at current BPM
 | Suznak | `1/1 9/8 27/22 4/3 3/2` | Rast lower |
 | Jiharkah | `1/1 9/8 5/4 4/3 3/2` | Ajam lower |
 | Major | `1/1 9/8 5/4 4/3 3/2 5/3 15/8` | 5-limit Ionian |
-| Ionian | `1/1 9/8 5/4 4/3 3/2 5/3 15/8` | Major alias |
-| Dorian | `1/1 9/8 6/5 4/3 3/2 5/3 9/5` | Minor third, major sixth |
-| Phrygian | `1/1 16/15 6/5 4/3 3/2 8/5 9/5` | Flat second |
-| Lydian | `1/1 9/8 5/4 45/32 3/2 5/3 15/8` | Sharp fourth |
-| Mixolydian | `1/1 9/8 5/4 4/3 3/2 5/3 9/5` | Major third, minor seventh |
-| Minor | `1/1 9/8 6/5 4/3 3/2 8/5 9/5` | 5-limit Aeolian |
-| Aeolian | `1/1 9/8 6/5 4/3 3/2 8/5 9/5` | Natural minor alias |
-| Locrian | `1/1 16/15 6/5 4/3 64/45 8/5 9/5` | Flat fifth |
+| Ionian | `1/1 9/8 81/64 4/3 3/2 27/16 243/128` | Pythagorean |
+| Dorian | `1/1 9/8 32/27 4/3 3/2 27/16 16/9` | Pythagorean |
+| Phrygian | `1/1 256/243 32/27 4/3 3/2 128/81 16/9` | Pythagorean |
+| Lydian | `1/1 9/8 81/64 729/512 3/2 27/16 243/128` | Pythagorean |
+| Mixolydian | `1/1 9/8 81/64 4/3 3/2 27/16 16/9` | Pythagorean |
+| Minor | `1/1 9/8 32/27 4/3 3/2 27/16 16/9` | Pythagorean minor used by `practice.mq` |
+| Aeolian | `1/1 9/8 32/27 4/3 3/2 128/81 16/9` | Pythagorean |
+| Locrian | `1/1 256/243 32/27 4/3 1024/729 128/81 16/9` | Pythagorean |
 | Diminished | `1/1 9/8 6/5 4/3 64/45 8/5 5/3 15/8` | Octatonic whole-half |
 
 ## Example

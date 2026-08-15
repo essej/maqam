@@ -5983,7 +5983,7 @@ mod tests {
         assert_eq!(app.phrases[2].bar.maqam_names, vec!["Locrian"]);
         assert_eq!(
             app.phrases[2].bar.ratio_strs[0],
-            "1/1 16/15 6/5 4/3 64/45 8/5 9/5"
+            "1/1 256/243 32/27 4/3 1024/729 128/81 16/9"
         );
         assert_eq!(app.phrases[3].bar.maqam_names, vec!["Diminished"]);
         assert_eq!(
