@@ -6159,8 +6159,8 @@ mod tests {
             Cmd::SetNam(NamCommand::Gain(gain)) if (gain - 1.5).abs() < f32::EPSILON
         ));
         assert!(matches!(
-            command::parse("nam gain 11").unwrap(),
-            Cmd::SetNam(NamCommand::Gain(gain)) if (gain - 11.0).abs() < f32::EPSILON
+            command::parse("nam gain 100").unwrap(),
+            Cmd::SetNam(NamCommand::Gain(gain)) if (gain - 100.0).abs() < f32::EPSILON
         ));
         let parsed = command::parse("nam import metallica.nam as metallica").unwrap();
         let Cmd::SetNam(NamCommand::Import { path, name }) = parsed else {
@@ -6173,7 +6173,7 @@ mod tests {
             panic!("expected NAM load command");
         };
         assert_eq!(path, "metallica");
-        assert!(command::parse("nam gain 12").is_err());
+        assert!(command::parse("nam gain 101").is_err());
     }
 
     #[test]

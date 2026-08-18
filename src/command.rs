@@ -5,6 +5,7 @@ use crate::tuning::{Maqam, Pitch};
 use crate::vcf::{VcfBank, VcfSettings, VcfTarget, VcoWave};
 
 pub const START_REF: isize = isize::MIN;
+pub const NAM_GAIN_MAX: f32 = 100.0;
 
 pub struct JinsSpec {
     pub src: String,
@@ -693,7 +694,7 @@ pub const LANGUAGE_PATTERNS: &[LanguagePatternMetadata] = &[
         notes: &[],
     },
     LanguagePatternMetadata {
-        syntax: "nam login | nam logout | nam tone3000 ID as name | nam pin URL as name | nam import FILENAME.nam [as name] | nam input left|right|stereo | nam latency left|right | nam search <query> | nam <name|FILENAME.nam|URL> | nam load <name|FILENAME.nam|URL> | nam ls | nam off | nam gain <0..11>",
+        syntax: "nam login | nam logout | nam tone3000 ID as name | nam pin URL as name | nam import FILENAME.nam [as name] | nam input left|right|stereo | nam latency left|right | nam search <query> | nam <name|FILENAME.nam|URL> | nam load <name|FILENAME.nam|URL> | nam ls | nam off | nam gain <0..100>",
         description: "cache, load, list, or bypass Neural Amp Modeler A1/A2 captures on live mic input",
         notes: &[
             "`nam pin URL as name` writes an unambiguous downloadable dependency into the loaded .mq file",
@@ -1447,7 +1448,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             .split_once(char::is_whitespace)
             .map(|(_, rest)| rest.trim())
             .filter(|s| !s.is_empty())
-            .ok_or("usage: nam <cached-name|FILENAME.nam|URL> | nam import <FILENAME.nam|URL> [as name] | nam ls | nam off | nam gain <0..11>")?;
+            .ok_or("usage: nam <cached-name|FILENAME.nam|URL> | nam import <FILENAME.nam|URL> [as name] | nam ls | nam off | nam gain <0..100>")?;
         let mut toks = rest.split_whitespace();
         match toks.next().unwrap_or("").to_ascii_lowercase().as_str() {
             "login" => return Ok(Cmd::SetNam(NamCommand::Login)),
@@ -1529,13 +1530,13 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             "gain" | "drive" => {
                 let value = toks
                     .next()
-                    .ok_or("usage: nam gain <0..11>; type a number after nam gain")?;
+                    .ok_or("usage: nam gain <0..100>; type a number after nam gain")?;
                 let gain = value
                     .parse::<f32>()
                     .map_err(|_| format!("bad NAM gain '{value}'; type a number from 0 to 8"))?;
-                if !(0.0..=11.0).contains(&gain) {
+                if !(0.0..=NAM_GAIN_MAX).contains(&gain) {
                     return Err(format!(
-                        "NAM gain {gain} out of range 0..11; use nam gain <0..11>"
+                        "NAM gain {gain} out of range 0..100; use nam gain <0..100>"
                     ));
                 }
                 return Ok(Cmd::SetNam(NamCommand::Gain(gain)));

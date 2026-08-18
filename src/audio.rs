@@ -528,7 +528,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         );
                     }
                     AudioCmd::SetNamGain(gain) => {
-                        nam_gain = gain.clamp(0.0, 11.0);
+                        nam_gain = gain.clamp(0.0, crate::command::NAM_GAIN_MAX);
                     }
                     AudioCmd::SetNamInput(route) => nam_input = route,
                     AudioCmd::MeasureInputLatency { input, result_tx } => {
@@ -705,7 +705,9 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                             bus_vol[volume_target_index(target)] = value;
                         }
                         PendingControl::NamEnabled(enabled) => nam_enabled = enabled,
-                        PendingControl::NamGain(gain) => nam_gain = gain.clamp(0.0, 11.0),
+                        PendingControl::NamGain(gain) => {
+                            nam_gain = gain.clamp(0.0, crate::command::NAM_GAIN_MAX)
+                        }
                         PendingControl::NamInput(route) => nam_input = route,
                         PendingControl::Sympathetics(enabled) => {
                             sympathetics_enabled = enabled;
