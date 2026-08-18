@@ -11,10 +11,10 @@ Y|8|sym on
 Y|12|sym harmony root 0.50 third 0.25 fifth 0.10 octave 0.15
 Y|9|sym kanun decay 0.995 drive 2
 Y|20|sym mic decay 0.999 drive 2
-V|19|vcf cut 3000 res 0.98 drive 2
+V|19|vcf cut 3000 res 0.98 drive 3
 F|22|flanger rate 0.2 depth 0.15 delay 2 feedback 0.4 mix 0.25
 L|18|vol kanun 2
-L|23|vol mic 1
+L|23|vol mic 0.2
 P|2|3|d hijaz 4444
 P|4|1|d bayati 332332
 P|5|1|d saba, b- saba 664
