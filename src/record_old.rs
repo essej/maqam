@@ -471,7 +471,8 @@ fn expand_one_cycle(
                 | ControlSpec::SetNamGain(_)
                 | ControlSpec::SetNamInput(_)
                 | ControlSpec::SetVol(_)
-                | ControlSpec::SetBusVol(_, _) => {}
+                | ControlSpec::SetBusVol(_, _)
+                | ControlSpec::SetDry(_) => {}
             }
             cur += 1;
             continue;

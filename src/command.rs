@@ -962,6 +962,10 @@ pub enum Cmd {
         target: VcfTarget,
         value: f32,
     },
+    InsertDry {
+        before: isize,
+        percent: f32,
+    },
     InsertNam {
         before: isize,
         command: NamCommand,
@@ -1021,6 +1025,10 @@ pub enum Cmd {
         target: VcfTarget,
         value: f32,
     },
+    EditDry {
+        id: isize,
+        percent: f32,
+    },
     EditNam {
         id: isize,
         command: NamCommand,
@@ -1062,6 +1070,7 @@ pub enum Cmd {
     SetNam(NamCommand),
     SetVol(f32),
     SetBusVol(VcfTarget, f32),
+    SetDry(f32),
     Record(usize),
     TogglePause {
         start_id: Option<isize>,
@@ -1309,6 +1318,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             Cmd::SetFx(change) => Ok(Cmd::EditFx { id, change }),
             Cmd::SetVol(value) => Ok(Cmd::EditVol { id, value }),
             Cmd::SetBusVol(target, value) => Ok(Cmd::EditBusVol { id, target, value }),
+            Cmd::SetDry(percent) => Ok(Cmd::EditDry { id, percent }),
             Cmd::SetNam(command) => Ok(Cmd::EditNam { id, command }),
             Cmd::Sympathetics(enabled) => Ok(Cmd::EditSympathetics { id, enabled }),
             Cmd::SympatheticDecay(decay) => Ok(Cmd::EditSympatheticDecay { id, decay }),
@@ -1383,6 +1393,7 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
                 target,
                 value,
             }),
+            Cmd::SetDry(percent) => Ok(Cmd::InsertDry { before, percent }),
             Cmd::SetNam(command) => Ok(Cmd::InsertNam { before, command }),
             Cmd::Sympathetics(enabled) => Ok(Cmd::InsertSympathetics { before, enabled }),
             Cmd::SympatheticDecay(decay) => Ok(Cmd::InsertSympatheticDecay { before, decay }),
@@ -1611,6 +1622,22 @@ pub fn parse(raw: &str) -> Result<Cmd, String> {
             return Err(format!("vol {n} out of range 0–2"));
         }
         return Ok(Cmd::SetVol(n));
+    }
+
+    // ── DRY/WET INPUT MIX ────────────────────────────────────────────────
+    if al == "dry" {
+        let value = input
+            .split_whitespace()
+            .nth(1)
+            .ok_or("usage: dry <0..100>")?;
+        let percent: f32 = value
+            .trim_end_matches('%')
+            .parse()
+            .map_err(|_| format!("bad dry percentage '{value}'"))?;
+        if !(0.0..=100.0).contains(&percent) {
+            return Err(format!("dry {percent} out of range 0–100"));
+        }
+        return Ok(Cmd::SetDry(percent));
     }
 
     // ── DELETE: x<N> [N …] ───────────────────────────────────────────────

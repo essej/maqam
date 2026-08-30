@@ -324,6 +324,7 @@ sus <n|+n|-n|*k|/k>                  same as s
 vol <n>                              live volume multiplier, range 0..2
 vol <all|mic|bass|kanun|drums|sym> <n>
                                      post-VCF bus volume, range 0..2
+dry <0..100>                         percent totally dry input (0 = processed, 100 = dry)
 tuneto <pitch>                       live tuning reference, e.g. tuneto c or tuneto b-
 ```
 

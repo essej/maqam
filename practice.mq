@@ -6,10 +6,11 @@ N|16|nam input right
 B|4|120
 V|8|vcf bass cut 800 res 0.98 drive 2
 V|9|vcf kanun cut 500 res 0.98 drive 1 wave saw
-V|19|vcf mic cut 3000 res 0.98 drive 1
-Y|1|sym mic decay 0.999 drive 1 amount 3
+V|19|vcf mic cut 4000 res 0.98 drive 0.25
+Y|1|sym mic decay 0.999 drive 1 amount 1
 Y|10|sym kanun decay 0.99 drive 0.5 amount 1
 Y|11|sym on
 Y|12|sym harmony root 0.25 third 0.25 fifth 0.25 octave 0.25
 L|20|vol mic 1
+D|25|dry 25
 P|24|1|d minor, d bayati 44332

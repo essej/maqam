@@ -76,6 +76,7 @@ pub struct App {
     pub fx: FxSettings,
     pub vol: f32,
     pub bus_vol: [f32; 6],
+    pub dry_mix: f32,
     pub tune_to: Pitch,
     pub live_nam_commands: Vec<String>,
     pub paused: bool,
@@ -121,6 +122,7 @@ impl App {
             fx: FxSettings::default(),
             vol: 1.0,
             bus_vol: [1.0; 6],
+            dry_mix: 0.0,
             tune_to: Pitch::parse("d").unwrap(),
             live_nam_commands: Vec::new(),
             paused: false,
@@ -155,6 +157,7 @@ impl App {
                 let _ = app.audio_tx.send(AudioCmd::SetBusVol(target, value));
             }
         }
+        let _ = app.audio_tx.send(AudioCmd::SetDry(app.dry_mix));
         app
     }
 
@@ -580,6 +583,7 @@ impl App {
         let _ = self.audio_tx.send(AudioCmd::SetVcfBank(start_vcf));
         let _ = self.audio_tx.send(AudioCmd::SetFxSettings(start_fx));
         let _ = self.audio_tx.send(AudioCmd::SetVol(self.vol));
+        let _ = self.audio_tx.send(AudioCmd::SetDry(self.dry_mix));
         let _ = self.audio_tx.send(AudioCmd::SetPaused(self.paused));
         for p in self.phrases.iter().cloned() {
             let _ = self.audio_tx.send(AudioCmd::AddPhrase(p));
@@ -708,7 +712,8 @@ impl App {
                     | ControlSpec::SetNamGain(_)
                     | ControlSpec::SetNamInput(_)
                     | ControlSpec::SetVol(_)
-                    | ControlSpec::SetBusVol(_, _) => {}
+                    | ControlSpec::SetBusVol(_, _)
+                    | ControlSpec::SetDry(_) => {}
                 }
                 continue;
             }
@@ -752,6 +757,7 @@ impl App {
         let _ = self.audio_tx.send(AudioCmd::SetVcfBank(self.vcf));
         let _ = self.audio_tx.send(AudioCmd::SetFxSettings(self.fx));
         let _ = self.audio_tx.send(AudioCmd::SetVol(self.vol));
+        let _ = self.audio_tx.send(AudioCmd::SetDry(self.dry_mix));
         let _ = self.audio_tx.send(AudioCmd::SetPaused(false));
         let _ = self.audio_tx.send(AudioCmd::AddPhrase(phrase));
         let _ = self.audio_tx.send(AudioCmd::SetCurPhrase(0));
@@ -1084,6 +1090,14 @@ impl App {
                 );
             }
 
+            Cmd::InsertDry { before, percent } => {
+                self.insert_timeline_control(
+                    before,
+                    format!("dry {percent}"),
+                    ControlSpec::SetDry(percent),
+                );
+            }
+
             Cmd::InsertSympathetics { before, enabled } => {
                 self.insert_timeline_control(
                     before,
@@ -1161,6 +1175,15 @@ impl App {
                 let _ = self.audio_tx.send(AudioCmd::SetBusVol(target, value));
                 self.message = Some(match self.save_globals() {
                     Ok(()) => format!("vol {} → {value:.2}", target.as_str()),
+                    Err(err) => format!("✗ {err}"),
+                });
+            }
+
+            Cmd::SetDry(percent) => {
+                self.dry_mix = percent;
+                let _ = self.audio_tx.send(AudioCmd::SetDry(percent));
+                self.message = Some(match self.save_globals() {
+                    Ok(()) => format!("dry → {percent:.0}%  processed → {:.0}%", 100.0 - percent),
                     Err(err) => format!("✗ {err}"),
                 });
             }
@@ -1670,6 +1693,14 @@ impl App {
                     id,
                     format!("vol {} {value}", target.as_str()),
                     ControlSpec::SetBusVol(target, value),
+                );
+            }
+
+            Cmd::EditDry { id, percent } => {
+                self.replace_timeline_control(
+                    id,
+                    format!("dry {percent}"),
+                    ControlSpec::SetDry(percent),
                 );
             }
 
@@ -2257,6 +2288,9 @@ impl App {
                 out.push_str(&format!("vol {} {}\n", target.as_str(), value));
             }
         }
+        if self.dry_mix != 0.0 {
+            out.push_str(&format!("dry {}\n", self.dry_mix));
+        }
         out.push_str(&format!("tuneto {}\n", self.tune_to.source_token()));
         fs::write(&path, out).map_err(|e| {
             format!(
@@ -2294,13 +2328,14 @@ impl App {
                 Cmd::SetBusVol(target, value) => {
                     self.bus_vol[volume_target_index(target)] = value;
                 }
+                Cmd::SetDry(percent) => self.dry_mix = percent,
                 Cmd::TuneTo(pitch) => {
                     self.tune_to = pitch;
                     crate::tuning::tune_to_standard_pitch(pitch);
                 }
                 _ => {
                     return Err(format!(
-                        "{} line {line_no}: globals only support vol and tuneto; remove this line or change it to vol <n>, vol <target> <n>, or tuneto <pitch>",
+                        "{} line {line_no}: globals only support vol, dry, and tuneto",
                         path.display()
                     ));
                 }
@@ -2614,6 +2649,15 @@ impl App {
                     };
                     loaded.push(build_control_entry(id, fields[2].clone(), control));
                 }
+                Some("D") if fields.len() == 3 => {
+                    let control = match command::parse(&fields[2])
+                        .map_err(|error| format!("line {line_no}: invalid dry control: {error}"))?
+                    {
+                        Cmd::SetDry(percent) => ControlSpec::SetDry(percent),
+                        _ => return Err(format!("line {line_no}: expected dry line")),
+                    };
+                    loaded.push(build_control_entry(id, fields[2].clone(), control));
+                }
                 Some("N") if fields.len() == 3 => {
                     let parsed =
                         command::parse(&fields[2]).map_err(|e| format!("line {line_no}: {e}"))?;
@@ -2795,6 +2839,7 @@ impl App {
         let _ = self.audio_tx.send(AudioCmd::SetVcfBank(start_vcf));
         let _ = self.audio_tx.send(AudioCmd::SetFxSettings(start_fx));
         let _ = self.audio_tx.send(AudioCmd::SetVol(self.vol));
+        let _ = self.audio_tx.send(AudioCmd::SetDry(self.dry_mix));
         let _ = self.audio_tx.send(AudioCmd::SetPaused(false));
         for cmd in live_nam_audio_cmds {
             let _ = self.audio_tx.send(cmd);
@@ -2998,6 +3043,7 @@ impl App {
         let _ = self.audio_tx.send(AudioCmd::SetVcfBank(start_vcf));
         let _ = self.audio_tx.send(AudioCmd::SetFxSettings(start_fx));
         let _ = self.audio_tx.send(AudioCmd::SetVol(self.vol));
+        let _ = self.audio_tx.send(AudioCmd::SetDry(self.dry_mix));
         let _ = self.audio_tx.send(AudioCmd::SetPaused(false));
         for p in loaded {
             let _ = self.audio_tx.send(AudioCmd::AddPhrase(p));
@@ -3144,6 +3190,7 @@ impl App {
         let _ = self.audio_tx.send(AudioCmd::SetVcfBank(start_vcf));
         let _ = self.audio_tx.send(AudioCmd::SetFxSettings(start_fx));
         let _ = self.audio_tx.send(AudioCmd::SetVol(self.vol));
+        let _ = self.audio_tx.send(AudioCmd::SetDry(self.dry_mix));
         let _ = self.audio_tx.send(AudioCmd::SetPaused(false));
         for p in loaded {
             let _ = self.audio_tx.send(AudioCmd::AddPhrase(p));
@@ -6437,6 +6484,49 @@ mod tests {
             Some(ControlSpec::SetBusVol(VcfTarget::Mic, value))
                 if (value - 0.25).abs() < 0.0001
         ));
+    }
+
+    #[test]
+    fn dry_mix_is_live_and_timeline_state() {
+        let _guard = session_test_lock();
+        let old_path = std::env::var("MAQAM_GLOBALS_PATH").ok();
+        let globals_path = std::env::temp_dir().join(format!(
+            "maqam-dry-mix-{}.ml",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::env::set_var("MAQAM_GLOBALS_PATH", &globals_path);
+        let (tx, rx) = bounded(32);
+        let mut app = App::new(tx);
+        while rx.try_recv().is_ok() {}
+
+        app.handle_command("dry 25");
+        assert_eq!(app.dry_mix, 25.0);
+        assert!(matches!(rx.try_recv(), Ok(AudioCmd::SetDry(v)) if v == 25.0));
+        assert!(fs::read_to_string(&globals_path)
+            .unwrap()
+            .contains("dry 25\n"));
+
+        app.handle_command("d bayati 44");
+        app.handle_command("i 0 dry 50");
+        assert!(matches!(
+            app.phrases[0].control,
+            Some(ControlSpec::SetDry(50.0))
+        ));
+        app.handle_command("edit 0 dry 75");
+        assert!(matches!(
+            app.phrases[1].control,
+            Some(ControlSpec::SetDry(75.0))
+        ));
+
+        let _ = fs::remove_file(&globals_path);
+        if let Some(path) = old_path {
+            std::env::set_var("MAQAM_GLOBALS_PATH", path);
+        } else {
+            std::env::remove_var("MAQAM_GLOBALS_PATH");
+        }
     }
 
     #[test]

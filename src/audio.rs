@@ -66,6 +66,7 @@ enum PendingControl {
     Fx(crate::command::FxChange),
     Vol(f32),
     BusVol(VcfTarget, f32),
+    Dry(f32),
     NamEnabled(bool),
     NamGain(f32),
     NamInput(NamInput),
@@ -430,6 +431,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
     let mut sustain = 1.25f64;
     let mut vol = 1.0f32;
     let mut bus_vol = [1.0f32; 6];
+    let mut dry_mix = 0.0f32;
     let mut vcf = VcfBank::default();
     let mut vcf_filters = FilterBank::new(sr as f32);
     let mut fx = FxSettings::default();
@@ -541,6 +543,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     AudioCmd::SetBusVol(target, value) => {
                         bus_vol[volume_target_index(target)] = value;
                     }
+                    AudioCmd::SetDry(percent) => dry_mix = (percent / 100.0).clamp(0.0, 1.0),
                     AudioCmd::SetPaused(p) => {
                         paused = p;
                     }
@@ -664,6 +667,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         vcf_filters = FilterBank::new(sr as f32);
                         fx = FxSettings::default();
                         fx_processor = FxProcessor::new(sr as f32);
+                        dry_mix = 0.0;
                     }
                 }
             }
@@ -704,6 +708,7 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                         PendingControl::BusVol(target, value) => {
                             bus_vol[volume_target_index(target)] = value;
                         }
+                        PendingControl::Dry(percent) => dry_mix = (percent / 100.0).clamp(0.0, 1.0),
                         PendingControl::NamEnabled(enabled) => nam_enabled = enabled,
                         PendingControl::NamGain(gain) => {
                             nam_gain = gain.clamp(0.0, crate::command::NAM_GAIN_MAX)
@@ -1011,6 +1016,10 @@ pub fn start_audio(rx: Receiver<AudioCmd>) -> anyhow::Result<AudioStreams> {
                     right = (right + mic_output.1).clamp(-1.0, 1.0);
                 }
 
+                // Global dry mix is applied last: the dry side is the selected
+                // original interface input, untouched by NAM, VCF, FX, or gain.
+                (left, right) = apply_dry_mix((left, right), dry_input, dry_mix);
+
                 if frame.len() >= 2 {
                     frame[0] = left;
                     frame[1] = right;
@@ -1103,6 +1112,7 @@ fn tick_sequencer(
                 ControlSpec::SetFx(v) => PendingControl::Fx(v),
                 ControlSpec::SetVol(v) => PendingControl::Vol(v),
                 ControlSpec::SetBusVol(target, value) => PendingControl::BusVol(target, value),
+                ControlSpec::SetDry(percent) => PendingControl::Dry(percent),
                 ControlSpec::SetNamEnabled(v) => PendingControl::NamEnabled(v),
                 ControlSpec::SetNamGain(v) => PendingControl::NamGain(v),
                 ControlSpec::SetNamInput(v) => PendingControl::NamInput(v),
@@ -1269,6 +1279,14 @@ fn post_vcf_output_stem(stem: (f32, f32), master_gain: f32, output_gain: f32) ->
     )
 }
 
+fn apply_dry_mix(processed: (f32, f32), dry: f32, amount: f32) -> (f32, f32) {
+    let amount = amount.clamp(0.0, 1.0);
+    (
+        (processed.0 * (1.0 - amount) + dry * amount).clamp(-1.0, 1.0),
+        (processed.1 * (1.0 - amount) + dry * amount).clamp(-1.0, 1.0),
+    )
+}
+
 fn select_nam_output(dry: f32, modeled: f32, active: bool) -> f32 {
     if active {
         modeled
@@ -1294,6 +1312,15 @@ mod tests {
     fn active_nam_has_no_parallel_dry_signal() {
         assert_eq!(select_nam_output(0.75, -0.25, true), -0.25);
         assert_eq!(select_nam_output(0.75, -0.25, false), 0.75);
+    }
+
+    #[test]
+    fn dry_mix_crossfades_after_all_processing() {
+        assert_eq!(apply_dry_mix((0.8, -0.4), 0.2, 0.0), (0.8, -0.4));
+        assert_eq!(apply_dry_mix((0.8, -0.4), 0.2, 1.0), (0.2, 0.2));
+        let half = apply_dry_mix((0.8, -0.4), 0.2, 0.5);
+        assert!((half.0 - 0.5).abs() < 1e-6);
+        assert!((half.1 + 0.1).abs() < 1e-6);
     }
     use crate::command::{SympatheticHarmony, SympatheticHarmonyComponent};
 
